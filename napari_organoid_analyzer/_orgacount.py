@@ -10,7 +10,9 @@ import mmdet
 from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.detection_head_model import DetectionHead
-from napari_organoid_analyzer._SAMOS.util.box_ops_numpy import cxcywh_to_xyxy 
+from napari_organoid_analyzer._SAMOS.util.box_ops_numpy import cxcywh_to_xyxy
+import pickle
+
 
 class OrganoiDL():
     '''
@@ -65,11 +67,10 @@ class OrganoiDL():
         ''' Initialise  model instance and load model checkpoint and send to device. '''
         self.model_name = model_name
         model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
-        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
+        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.UTIL_DIR), settings.SAM_MODEL["filename"]))
         self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
         if model_name == 'SAMOS':
-            checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
-            # TODO: if correct then save modified checkpoint
+            checkpoint = torch.load(model_checkpoint, map_location=self.device)
             hparams = checkpoint['hyper_parameters']
             self.model = DetectionHead(
                 learning_rate=hparams['learning_rate'],
@@ -273,7 +274,7 @@ class OrganoiDL():
             Array of all predicted bboxes in xyxy format
         """
         if bboxes.shape[0] == 0:
-            pred_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+            pred_mask = np.array([])
         else:
             self.sam_predictor.set_image(img)
             bboxes = torch.stack((
@@ -289,12 +290,9 @@ class OrganoiDL():
                 boxes=bboxes,
                 multimask_output=False
             )
-            # TODO: save per-organoid masks before combining
-            pred_mask = np.any(pred_mask.cpu().numpy(), axis=0)
-            pred_mask = np.squeeze(pred_mask.astype(np.uint8))
+            pred_mask = np.squeeze(pred_mask.cpu().numpy().astype(np.uint8))
 
         self.pred_masks[mask_name] = pred_mask
-
         return pred_mask
 
 
@@ -389,7 +387,8 @@ class OrganoiDL():
 
     def remove_shape_from_dict(self, shapes_name):
         """ Removes results of shapes_name from all result dicts. """
-        del self.pred_bboxes[shapes_name]
-        del self.pred_scores[shapes_name]
-        del self.pred_ids[shapes_name]
-        del self.next_id[shapes_name]
+        self.pred_bboxes.pop(shapes_name, None)
+        self.pred_scores.pop(shapes_name, None)
+        self.pred_ids.pop(shapes_name, None)
+        self.next_id.pop(shapes_name, None)
+        self.pred_masks.pop(shapes_name, None)

@@ -15,6 +15,13 @@ from torchvision.ops import nms
 
 from napari_organoid_analyzer import settings
 
+def collate_instance_masks(masks):
+    """
+    Merges instance-based masks into a single mask.
+    Args:
+        masks np.ndarray: List of binary masks for each instance of dimension [N, H, W]
+    """
+    return np.any(masks, axis=0)
 
 def add_local_models():
     """ Checks the models directory for any local models previously added by the user.
