@@ -1,0 +1,18 @@
+name: napari-organoid-analyzer
+display_name: napari organoid analyzer
+contributions:
+  commands:
+    - id: napari-organoid-analyzer.OrganoidAnalyzerWidget
+      python_name: napari_organoid_analyzer._widget:OrganoidAnalyzerWidget
+      title: Make organoid analyzer widget
+    - id: napari-organoid-analyzer.get_reader
+      title: Read ".json" annotation files
+      python_name: napari_organoid_analyzer._reader:get_reader
+  widgets:
+    - command: napari-organoid-analyzer.OrganoidAnalyzerWidget
+      display_name: Organoid-Analyzer
+  readers:
+    - command: napari-organoid-analyzer.get_reader
+      filename_patterns:
+      - '*.json'
+      accepts_directories: false
