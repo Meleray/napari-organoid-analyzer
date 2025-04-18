@@ -10,15 +10,19 @@ This plugin has been tested with python 3.10 - you may consider using conda or p
 
 1. Install `napari-organoid-counter` 
 
-    ```pip install git+https://github.com/Meleray/napari-organoid-analyzer```
+    ```pip install git+https://github.com/Meleray/napari-organoid-analyzer@intel-mac```
 
 2. Install `segment-anything`
 
 ```pip install git+https://github.com/facebookresearch/segment-anything.git```
 
-3. For using models other than SAMOS:
+3. Manually install OpenMMLab dependencies:
 
-     ``` mim install "mmcv<2.2.0,>=2.0.0rc4" ```
+     ``` 
+    mim install mmengine
+    mim install "mmcv==2.1.0"
+    mim install mmdet
+     ```
 
 ## How to use?
 After installing, you can start napari (either by typing ```napari``` in your terminal or by launching the application) and select the plugin from the drop down menu.
