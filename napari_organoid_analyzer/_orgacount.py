@@ -9,8 +9,10 @@ import torch
 import mmdet
 from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
-from napari_organoid_analyzer._SAMOS.detection_head_model import DetectionHead
-from napari_organoid_analyzer._SAMOS.util.box_ops_numpy import cxcywh_to_xyxy 
+from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
+from napari_organoid_analyzer._SAMOS.util.box_ops_numpy import cxcywh_to_xyxy
+import sys
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 class OrganoiDL():
     '''
@@ -65,37 +67,16 @@ class OrganoiDL():
         ''' Initialise  model instance and load model checkpoint and send to device. '''
         self.model_name = model_name
         model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
-        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
+        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.UTIL_DIR), settings.SAM_MODEL["filename"]))
         self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
         if model_name == 'SAMOS':
             checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
-            # TODO: if correct then save modified checkpoint
-            hparams = checkpoint['hyper_parameters']
-            self.model = DetectionHead(
-                learning_rate=hparams['learning_rate'],
-                weight_decay=hparams['weight_decay'],
-                lr_drop=hparams['lr_drop'],
-                set_cost_class=hparams['set_cost_class'],
-                set_cost_bbox=hparams['set_cost_bbox'],
-                set_cost_giou=hparams['set_cost_giou'],
-                max_epochs=hparams['max_epochs'],
-                num_queries=hparams['num_queries'],
-                transformer_dim=hparams['transformer_dim'],
-                nheads=hparams['nheads'],
-                dim_feedforward=hparams['dim_feedforward'],
-                num_layers=hparams['num_layers_low_res'],
-                dropout=hparams['dropout'],
-                pre_norm=hparams['pre_norm'],
-                bbox_loss_coef=hparams['bbox_loss_coef'],
-                giou_loss_coef=hparams['giou_loss_coef'],
-                eos_coef=hparams['eos_coef'],
-                aux_loss=hparams['aux_loss'],
-            )
-            new_checkpoint = {}
+            self.model = DetectionTransformer(**checkpoint['hyper_parameters'])
+            new_state_dict = {}
             for key, value in checkpoint['state_dict'].items():
                 new_key = key.replace('model.', '') 
-                new_checkpoint[new_key] = value
-            self.model.load_state_dict(new_checkpoint)
+                new_state_dict[new_key] = value
+            self.model.load_state_dict(new_state_dict)
             self.model.to(self.device)
         else:
             mmdet_path = os.path.dirname(mmdet.__file__)
@@ -161,29 +142,10 @@ class OrganoiDL():
                     #self.model.eval()
                     with torch.inference_mode():
                         self.sam_predictor.set_image(img_crop)
-                        #image_embedding = {
-                        #    'original_size': self.sam_predictor.original_size,
-                        #    'input_size': self.sam_predictor.input_size,
-                        #    'features': self.sam_predictor.features,
-                        #    'is_image_set': True,
-                        #}
                         image_embedding = self.sam_predictor.features.to(self.device)
-                        pos_embedding = self.model.position_embedding(image_embedding)
-                        output = self.model.forward(
-                            query_embedding=self.model.query_embed.weight,
-                            image_embedding=image_embedding,
-                            pos_embedding=pos_embedding
-                        )
-                        scores = torch.nn.functional.softmax(output['pred_logits'], dim=-1)
-                        scores = scores[0, :, 0]
-                        bboxes = output['pred_boxes'][0] * window_size
-                        bboxes = np.array(cxcywh_to_xyxy(bboxes))
-                        bboxes = np.stack((
-                            bboxes[:, 1],
-                            bboxes[:, 0],
-                            bboxes[:, 3],
-                            bboxes[:, 2]
-                        ), axis=1)
+                        pred = self.model.forward(image_embedding, window_size)
+                        bboxes = pred[0]['boxes']
+                        scores = pred[0]['scores']
                 else:
                     output = self.model(img_crop)
                     bboxes = output['predictions'][0]['bboxes']
@@ -273,7 +235,7 @@ class OrganoiDL():
             Array of all predicted bboxes in xyxy format
         """
         if bboxes.shape[0] == 0:
-            pred_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+            pred_mask = np.array([])
         else:
             self.sam_predictor.set_image(img)
             bboxes = torch.stack((
@@ -289,12 +251,9 @@ class OrganoiDL():
                 boxes=bboxes,
                 multimask_output=False
             )
-            # TODO: save per-organoid masks before combining
-            pred_mask = np.any(pred_mask.cpu().numpy(), axis=0)
-            pred_mask = np.squeeze(pred_mask.astype(np.uint8))
+            pred_mask = np.squeeze(pred_mask.cpu().numpy().astype(np.uint8))
 
         self.pred_masks[mask_name] = pred_mask
-
         return pred_mask
 
 
@@ -389,7 +348,8 @@ class OrganoiDL():
 
     def remove_shape_from_dict(self, shapes_name):
         """ Removes results of shapes_name from all result dicts. """
-        del self.pred_bboxes[shapes_name]
-        del self.pred_scores[shapes_name]
-        del self.pred_ids[shapes_name]
-        del self.next_id[shapes_name]
+        self.pred_bboxes.pop(shapes_name, None)
+        self.pred_scores.pop(shapes_name, None)
+        self.pred_ids.pop(shapes_name, None)
+        self.next_id.pop(shapes_name, None)
+        self.pred_masks.pop(shapes_name, None)

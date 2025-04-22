@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from .util import box_ops
-from .util.misc import (get_world_size, is_dist_avail_and_initialized)
+from napari_organoid_analyzer._SAMOS.util import box_ops
+from napari_organoid_analyzer._SAMOS.util.misc import (get_world_size, is_dist_avail_and_initialized)
 
 
 class SetCriterion(nn.Module):

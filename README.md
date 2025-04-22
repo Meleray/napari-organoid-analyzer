@@ -8,7 +8,7 @@ A napari plugin to automatically detect, segment and analyze organoids from micr
 
 This plugin has been tested with python 3.10 - you may consider using conda or pyenv to create your dedicated environment before running the `napari-organoid-analyzer`.
 
-1. Install `napari-organoid-counter` 
+1. Install `napari-organoid-analyzer` 
 
     ```pip install git+https://github.com/Meleray/napari-organoid-analyzer@intel-mac```
 
@@ -35,7 +35,7 @@ the coverage at least stays the same before you submit a pull request.
 ## License
 
 Distributed under the terms of the [MIT] license,
-"napari-organoid-counter" is free and open source software
+"napari-organoid-analyzer" is free and open source software
 
 ## Dependencies
 
