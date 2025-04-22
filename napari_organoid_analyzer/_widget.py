@@ -9,7 +9,7 @@ import napari
 from napari import layers
 from napari.utils.notifications import show_info, show_error, show_warning
 from urllib.request import urlretrieve
-from napari_organoid_analyzer._utils import convert_boxes_from_napari_view
+from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, collate_instance_masks
 
 
 import numpy as np
@@ -84,6 +84,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # models to the model dict
         settings.init()
         settings.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        settings.UTIL_DIR.mkdir(parents=True, exist_ok=True)
         utils.add_local_models()
         self.model_id = 2 # yolov3
         self.model_name = list(settings.MODELS.keys())[self.model_id]
@@ -98,6 +99,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.image_layer_names = []
         self.image_layer_name = None
         self.label_layer_name = None
+        self.segmentation_layer_name = None
         self.shape_layer_names = []
         self.save_layer_name = ''
         self.cur_shapes_name = ''
@@ -118,6 +120,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.layout().addWidget(self._setup_input_widget())
         self.layout().addWidget(self._setup_output_widget())
         self.layout().addWidget(self._setup_segmentation_widget())
+        self.layout().addWidget(self._setup_segmentation_export_widget())
 
         # initialise organoidl instance
         self.organoiDL = OrganoiDL(self.handle_progress)
@@ -324,7 +327,7 @@ class OrganoidAnalyzerWidget(QWidget):
             return
         
         # check if SAM model exists locally and if not ask user if it's ok to download
-        if not utils.return_is_file(settings.MODELS_DIR, settings.SAM_MODEL["filename"]): 
+        if not utils.return_is_file(settings.UTIL_DIR, settings.SAM_MODEL["filename"]): 
             confirm_window = ConfirmSamUpload(self)
             confirm_window.exec_()
             # if user clicks cancel return doing nothing 
@@ -332,13 +335,13 @@ class OrganoidAnalyzerWidget(QWidget):
             # otherwise download model and display progress in progress bar
             else: 
                 self.progress_box.show()
-                save_loc = os.path.join(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"])
+                save_loc = os.path.join(str(settings.UTIL_DIR),  settings.SAM_MODEL["filename"])
                 urlretrieve(settings.SAM_MODEL["url"], save_loc, self.handle_progress)
                 self.progress_box.hide()
 
         # check if model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[self.model_name]["filename"]): 
-            confirm_window = ConfirmUpload(self)
+            confirm_window = ConfirmUpload(self, self.model_name)
             confirm_window.exec_()
             # if user clicks cancel return doing nothing 
             if confirm_window.result() != QDialog.Accepted: return
@@ -417,11 +420,59 @@ class OrganoidAnalyzerWidget(QWidget):
         if image.shape[2] == 4:
             image = image[:, :, :3]
         segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H:%M:%S')}"
+        show_info("Running segmentation. Please wait...")
+        masks = self.organoiDL.run_segmentation(image, segmentation_layer_name, bboxes)
+        self.viewer.add_image(collate_instance_masks(masks) * 255, name=segmentation_layer_name, colormap='red', blending='additive')
+        if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['scores']) != masks.shape[0]:
+            show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
+            return
+        self.viewer.layers[segmentation_layer_name].properties = {'box_id': labels_layer.properties['box_id'],'scores': labels_layer.properties['scores']}
+        show_info("Segmentation completed and added to the viewer.")
 
-        mask = self.organoiDL.run_segmentation(image, segmentation_layer_name, bboxes)
-        self.viewer.add_image(mask * 255, name=segmentation_layer_name, colormap='red', blending='additive')
+    def _on_export_masks(self):
+        """
+        Runs when user wants to export masks from the segmentation layer. Saves instance masks and a single collated mask as npy files.
+        """
+        if not self.segmentation_layer_name:
+            show_error("No segmentation layer selected. Please select a segmentation layer and try again.")
+            return
 
+        seg_layer = self.viewer.layers[self.segmentation_layer_name]
+        if seg_layer is None:
+            show_error(f"Layer '{self.segmentation_layer_name}' not found in the viewer.")
+            return
 
+        instance_masks = self.organoiDL.pred_masks[self.segmentation_layer_name]
+        ids = seg_layer.properties['box_id']
+        scores = seg_layer.properties['scores']
+
+        if len(ids) != instance_masks.shape[0] or len(scores) != instance_masks.shape[0]:
+            show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
+            return
+
+        data = {}
+        for i in range(len(ids)):
+            data[str(ids[i])] = {
+                'mask': instance_masks[i],
+                'score': scores[i]
+            }
+
+        collated_mask = collate_instance_masks(instance_masks)
+
+        # Open a dialog to select the folder to save the files
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Save Masks")
+        if not folder:
+            show_warning("No folder selected. Export canceled.")
+            return
+
+        # Save the data dictionary and collated mask as .npy files
+        data_file_path = os.path.join(folder, f"{self.segmentation_layer_name}_data.npy")
+        collated_mask_file_path = os.path.join(folder, f"{self.segmentation_layer_name}_collated_mask.npy")
+
+        np.save(data_file_path, data)
+        np.save(collated_mask_file_path, collated_mask)
+
+        show_info(f"Masks exported successfully to:\n{data_file_path}\n{collated_mask_file_path}")
 
     def _on_model_selection_changed(self):
         """ Is called when user selects a new model from the dropdown menu. """
@@ -628,7 +679,10 @@ class OrganoidAnalyzerWidget(QWidget):
         Set the latest added image to the current working image (self.image_layer_name)
         """
         for layer_name in added_items:
-            self.image_layer_selection.addItem(layer_name)
+            if layer_name.startswith('Segmentation-'):
+                self.segmentation_mask_layer_selection.addItem(layer_name)
+            else:
+                self.image_layer_selection.addItem(layer_name)
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
         self.image_layer_name = added_items[0]
@@ -640,7 +694,12 @@ class OrganoidAnalyzerWidget(QWidget):
         # update drop-down selection box and remove image from dict
         for removed_layer in removed_layers:
             item_id = self.image_layer_selection.findText(removed_layer)
-            self.image_layer_selection.removeItem(item_id)
+            if item_id >= 0:
+                self.image_layer_selection.removeItem(item_id)
+            item_id = self.segmentation_mask_layer_selection.findText(removed_layer)
+            if item_id >= 0:
+                self.segmentation_mask_layer_selection.removeItem(item_id)
+                self.organoiDL.remove_shape_from_dict(removed_layer)
             del self.original_images[removed_layer]
             del self.original_contrast[removed_layer]
 
@@ -785,7 +844,9 @@ class OrganoidAnalyzerWidget(QWidget):
         # setup drop down option for selecting which image to process
         self.image_layer_selection = QComboBox()
         if self.image_layer_names is not None:
-            for name in self.image_layer_names: self.image_layer_selection.addItem(name)
+            for name in self.image_layer_names: 
+                if not name.startswith('Segmentation-'):
+                    self.image_layer_selection.addItem(name)
         #self.image_layer_selection.setItemText(self.image_layer_name)
         self.image_layer_selection.currentIndexChanged.connect(self._on_image_selection_changed)
         # setup preprocess button to improve visualisation
@@ -1051,7 +1112,8 @@ class OrganoidAnalyzerWidget(QWidget):
         self.segmentation_image_layer_selection = QComboBox()
         if self.image_layer_names is not None:
             for name in self.image_layer_names:
-                self.segmentation_image_layer_selection.addItem(name)
+                if not name.startswith('Segmentation-'):
+                    self.segmentation_image_layer_selection.addItem(name)
         self.segmentation_image_layer_selection.currentIndexChanged.connect(self._on_labels_layer_change)
         hbox_img.addWidget(image_label, 2)
         hbox_img.addWidget(self.segmentation_image_layer_selection, 4)
@@ -1070,11 +1132,51 @@ class OrganoidAnalyzerWidget(QWidget):
         segmentation_widget.setLayout(vbox)
         return segmentation_widget
     
+    def _setup_segmentation_export_widget(self):
+        """
+        Sets up the GUI part for segmentation configuration.
+        """
+        segmentation_widget = QGroupBox('Segmentation Mask Export')
+        vbox = QVBoxLayout()
+        
+        # Image layer selection
+        hbox_img = QHBoxLayout()
+        image_label = QLabel('Segmentation layer: ', self)
+        image_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.segmentation_mask_layer_selection = QComboBox()
+        if self.image_layer_names is not None:
+            for name in self.image_layer_names:
+                if name.startswith('Segmentation-'):
+                    self.segmentation_mask_layer_selection.addItem(name)
+        self.segmentation_mask_layer_selection.currentIndexChanged.connect(self._on_segmentation_layer_change)
+        hbox_img.addWidget(image_label, 2)
+        hbox_img.addWidget(self.segmentation_mask_layer_selection, 4)
+        vbox.addLayout(hbox_img)
+        
+        # Run segmentation button
+        hbox_run = QHBoxLayout()
+        hbox_run.addStretch(1)
+        export_segmentation_btn = QPushButton("Export masks")
+        export_segmentation_btn.clicked.connect(self._on_export_masks)
+        export_segmentation_btn.setStyleSheet("border: 0px")
+        hbox_run.addWidget(export_segmentation_btn)
+        hbox_run.addStretch(1)
+        vbox.addLayout(hbox_run)
+        
+        segmentation_widget.setLayout(vbox)
+        return segmentation_widget
+    
     def _on_labels_layer_change(self):
         """
         Called when user changes layer of labels used for segmentation
         """
         self.label_layer_name = self.segmentation_image_layer_selection.currentText()
+
+    def _on_segmentation_layer_change(self):
+        """
+        Called when user changes layer of labels used for segmentation
+        """
+        self.segmentation_layer_name = self.segmentation_mask_layer_selection.currentText()
     
     def _on_layer_name_change(self, event):
         """
@@ -1091,8 +1193,6 @@ class OrganoidAnalyzerWidget(QWidget):
         for name in self._get_layer_names(layer_type=layers.Image):
             self.image_layer_selection.addItem(name)
 
-        # TODO: Handle layer name change 
-
 class ConfirmUpload(QDialog):
     '''
     The QDialog box that appears when the user selects to run organoid counter
@@ -1103,14 +1203,14 @@ class ConfirmUpload(QDialog):
             The parent widget, in this case an instance of OrganoidCounterWidget
 
     '''
-    def __init__(self, parent: QWidget):
+    def __init__(self, parent: QWidget, model_name: str):
         super().__init__(parent)
 
         self.setWindowTitle("Confirm Download")
         # setup buttons and text to be displayed
         ok_btn = QPushButton("OK")
         cancel_btn = QPushButton("Cancel")
-        text = ("Model not found locally. Downloading default model to \n"
+        text = (f"Model {model_name} not found locally. Downloading default model to \n"
                 +str(settings.MODELS_DIR)+"\n"
                 "This will only happen once. Click ok to continue or \n"
                 "cancel if you do not agree. You won't be able to run\n"
@@ -1138,12 +1238,12 @@ class ConfirmSamUpload(ConfirmUpload):
 
     '''
     def __init__(self, parent: QWidget):
-        super().__init__(parent)
+        super().__init__(parent, model_name="")
         text = ("SAM model not found locally. Downloading default model to \n"
-                +str(settings.MODELS_DIR)+"\n"
+                +str(settings.UTIL_DIR)+"\n"
                 "This will only happen once. Click ok to continue or \n"
                 "cancel if you do not agree. You won't be able to run\n"
                 "the organoid segmentation and detection with SAMOS\n" 
-                "if you click cancel. WARNING: You will need 1.2 GB of disk space!\n")
+                "if you click cancel. WARNING: The model size is 1.2 GB!")
         self.layout().itemAt(0).widget().setText(text)
 
