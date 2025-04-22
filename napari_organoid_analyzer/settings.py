@@ -17,7 +17,7 @@ def init():
                     "source": "https://zenodo.org/records/11388549/files/rtmdet_l_organoid_best_coco_bbox_mAP_epoch_323.pth"
                     },
         "SAMOS": {"filename": "own_checkpoint_last.ckpt", 
-                  "url": "https://huggingface.co/marr-peng-lab/organoid_detection/blob/main/own_checkpoint_last.ckpt"},
+                  "source": "https://huggingface.co/marr-peng-lab/organoid_detection/blob/main/own_checkpoint_last.ckpt"},
     }
 
     global SAM_MODEL

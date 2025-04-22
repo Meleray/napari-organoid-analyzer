@@ -1093,11 +1093,6 @@ class OrganoidAnalyzerWidget(QWidget):
 
         # TODO: Handle layer name change 
 
-
-
-
-
-
 class ConfirmUpload(QDialog):
     '''
     The QDialog box that appears when the user selects to run organoid counter
@@ -1149,6 +1144,6 @@ class ConfirmSamUpload(ConfirmUpload):
                 "This will only happen once. Click ok to continue or \n"
                 "cancel if you do not agree. You won't be able to run\n"
                 "the organoid segmentation and detection with SAMOS\n" 
-                "if you click cancel.")
+                "if you click cancel. WARNING: You will need 1.2 GB of disk space!\n")
         self.layout().itemAt(0).widget().setText(text)
 
