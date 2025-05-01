@@ -59,7 +59,10 @@ def init():
     COLOR_CLASS_2 = [0, 29 / 255, 1.0, 1.0]  # Blue
 
     global COLOR_DEFAULT
-    COLOR_DEFAULT = [1., 0, 1., 1.] # Magenta
+    COLOR_DEFAULT = [1.0, 0, 0, 1.0]  # Red
+
+    global TEXT_COLOR
+    TEXT_COLOR = [1.0, 0, 0, 1.0]  # Red for text labels
 
 
 

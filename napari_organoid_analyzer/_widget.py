@@ -15,12 +15,13 @@ from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, coll
 import numpy as np
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QComboBox, QPushButton, QLineEdit, QProgressBar, QSlider
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QComboBox, QPushButton, QLineEdit, QProgressBar, QSlider, QTabWidget, QTreeWidget, QTreeWidgetItem
 
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
 from napari_organoid_analyzer import settings
 import torch
+import pandas as pd
 import os
 
 import warnings
@@ -42,7 +43,7 @@ class OrganoidAnalyzerWidget(QWidget):
         min_diameter: int, default 30
             The minimum organoid diameter given in um
         confidence: float, default 0.8
-            The model confidence threhsold - equivalent to box_score_thresh of faster_rcnn
+            The confidence threhsold - equivalent to box_score_thresh of faster_rcnn
     Attributes
     ----------
         model_name: str
@@ -99,7 +100,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.image_layer_names = []
         self.image_layer_name = None
         self.label_layer_name = None
-        self.segmentation_layer_name = None
         self.shape_layer_names = []
         self.save_layer_name = ''
         self.cur_shapes_name = ''
@@ -115,12 +115,36 @@ class OrganoidAnalyzerWidget(QWidget):
         self.multi_annotation_mode = False
         # self.single_annotation_mode = True  # Initially, it's single annotation mode
 
-        # setup gui        
+        # Setup tab widget
+        self.tab_widget = QTabWidget()
+        self.configuration_tab = QWidget()
+        self.detection_data_tab = QWidget()
+
+        # Add tabs to the tab widget
+        self.tab_widget.addTab(self.configuration_tab, "Configuration")
+        self.tab_widget.addTab(self.detection_data_tab, "Detection data")
+        self.tab_widget.setTabEnabled(1, False)  # Initially disable the "Detection data" tab
+
+        # Set up the layout for the configuration tab
+        self.configuration_tab.setLayout(QVBoxLayout())
+        self.configuration_tab.layout().addWidget(self._setup_input_widget())
+        self.configuration_tab.layout().addWidget(self._setup_output_widget())
+        self.configuration_tab.layout().addWidget(self._setup_segmentation_widget())
+
+        # Set up the layout for the detection data tab
+        self.detection_data_tab.setLayout(QVBoxLayout())
+        self.detection_data_tree = QTreeWidget()
+        self.detection_data_tree.setHeaderLabels(["Detections", "Properties"])
+        self.detection_data_tab.layout().addWidget(self.detection_data_tree)
+
+        # Add export button below the tree view
+        export_button = QPushButton("Export Selected")
+        export_button.clicked.connect(self._export_detection_data_to_csv)
+        self.detection_data_tab.layout().addWidget(export_button)
+
+        # Add the tab widget to the main layout
         self.setLayout(QVBoxLayout())
-        self.layout().addWidget(self._setup_input_widget())
-        self.layout().addWidget(self._setup_output_widget())
-        self.layout().addWidget(self._setup_segmentation_widget())
-        self.layout().addWidget(self._setup_segmentation_export_widget())
+        self.layout().addWidget(self.tab_widget)
 
         # initialise organoidl instance
         self.organoiDL = OrganoiDL(self.handle_progress)
@@ -251,7 +275,9 @@ class OrganoidAnalyzerWidget(QWidget):
 
         for layer in self.viewer.layers:
             layer.events.name.connect(self._on_layer_name_change)
-            
+            if type(layer) == layers.Shapes:
+                layer.events.highlight.connect(self._on_shape_selected)
+
     def _removed_layer(self, event):
         """ Is called whenever a layer has been deleted (by the user) and removes the layer from GUI and backend. """
         new_image_layer_names = self._get_layer_names()
@@ -278,13 +304,14 @@ class OrganoidAnalyzerWidget(QWidget):
         new_text = 'Number of organoids: '+str(self.num_organoids)
         self.organoid_number_label.setText(new_text)
 
-    def _update_vis_bboxes(self, bboxes, scores, box_ids, labels_layer_name):
+    def _update_detections(self, bboxes, scores, box_ids, labels_layer_name):
         """ Adds the shapes layer to the viewer or updates it if already there """
         self._update_num_organoids(len(bboxes))
         # if layer already exists
         if labels_layer_name in self.shape_layer_names: 
             self.viewer.layers[labels_layer_name].data = bboxes # hack to get edge_width stay the same!
-            self.viewer.layers[labels_layer_name].properties = {'box_id': box_ids,'scores': scores}
+            self.viewer.layers[labels_layer_name].properties['box_id'] = box_ids
+            self.viewer.layers[labels_layer_name].properties['confidence'] = scores
             self.viewer.layers[labels_layer_name].edge_width = 12
             self.viewer.layers[labels_layer_name].refresh()
             self.viewer.layers[labels_layer_name].refresh_text()
@@ -293,13 +320,15 @@ class OrganoidAnalyzerWidget(QWidget):
             # if no organoids were found just make an empty shapes layer
             if self.num_organoids==0: 
                 self.cur_shapes_layer = self.viewer.add_shapes(name=labels_layer_name,
-                                                               properties={'box_id': [],'scores': []})
+                                                               properties={'box_id': [],'confidence': []})
             # otherwise make the layer and add the boxes
             else:
-                properties = {'box_id': box_ids,'scores': scores}
-                text_params = {'string': 'ID: {box_id}\nConf.: {scores:.2f}',
+                properties = {'box_id': box_ids,'confidence': scores}
+                text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
                                'size': 12,
-                               'anchor': 'upper_left',}
+                               'anchor': 'upper_left',
+                               'color': settings.TEXT_COLOR}
+                print(text_params['string'])
                 self.cur_shapes_layer = self.viewer.add_shapes(bboxes, 
                                                                name=labels_layer_name,
                                                                scale=self.viewer.layers[self.image_layer_name].scale,
@@ -325,7 +354,6 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.image_layer_name: 
             show_info('Please load an image first and try again!')
             return
-        
         # check if SAM model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.UTIL_DIR, settings.SAM_MODEL["filename"]): 
             confirm_window = ConfirmSamUpload(self)
@@ -393,7 +421,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # hide activity dock on completion
         self.viewer.window._status_bar._toggle_activity_dock(False)
         # update widget with results
-        self._update_vis_bboxes(bboxes, scores, box_ids, labels_layer_name)
+        self._update_detections(bboxes, scores, box_ids, labels_layer_name)
         # and update cur_shapes_name to newly created shapes layer
         self.cur_shapes_name = labels_layer_name
         # preprocess the image if not done so already to improve visualization
@@ -408,55 +436,49 @@ class OrganoidAnalyzerWidget(QWidget):
             return
 
         labels_layer = self.viewer.layers[self.label_layer_name]
+
         if labels_layer is None:
             show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
             return
         
         bboxes = convert_boxes_from_napari_view(labels_layer.data)
 
-
-        print(f"Segmenting with bboxes: {bboxes[0]}, len: {len(bboxes)}")
         image = self.viewer.layers[self.label2im[self.label_layer_name]].data
         if image.shape[2] == 4:
             image = image[:, :, :3]
         segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H:%M:%S')}"
-        show_info("Running segmentation. Please wait...")
-        masks = self.organoiDL.run_segmentation(image, segmentation_layer_name, bboxes)
+        
+        masks, features = self.organoiDL.run_segmentation(image, self.label_layer_name, bboxes)
+        
         self.viewer.add_image(collate_instance_masks(masks) * 255, name=segmentation_layer_name, colormap='red', blending='additive')
-        if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['scores']) != masks.shape[0]:
+        if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['confidence']) != masks.shape[0]:
             show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
             return
-        self.viewer.layers[segmentation_layer_name].properties = {'box_id': labels_layer.properties['box_id'],'scores': labels_layer.properties['scores']}
+        tmp_dict = labels_layer.properties.copy()
+        tmp_dict.update(features)
+        labels_layer.properties = tmp_dict
+        self._update_detection_data_tab()
         show_info("Segmentation completed and added to the viewer.")
 
     def _on_export_masks(self):
         """
         Runs when user wants to export masks from the segmentation layer. Saves instance masks and a single collated mask as npy files.
         """
-        if not self.segmentation_layer_name:
-            show_error("No segmentation layer selected. Please select a segmentation layer and try again.")
+        if not self.label_layer_name:
+            show_error("No label layer selected. Please select a label layer and try again.")
             return
 
-        seg_layer = self.viewer.layers[self.segmentation_layer_name]
-        if seg_layer is None:
-            show_error(f"Layer '{self.segmentation_layer_name}' not found in the viewer.")
+        label_layer = self.viewer.layers[self.label_layer_name]
+        if label_layer is None:
+            show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
             return
 
-        instance_masks = self.organoiDL.pred_masks[self.segmentation_layer_name]
-        ids = seg_layer.properties['box_id']
-        scores = seg_layer.properties['scores']
-
-        if len(ids) != instance_masks.shape[0] or len(scores) != instance_masks.shape[0]:
-            show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
-            return
-
-        data = {}
-        for i in range(len(ids)):
-            data[str(ids[i])] = {
-                'mask': instance_masks[i],
-                'score': scores[i]
-            }
-
+        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+        lengths = [len(v) for v in label_layer.properties.values()]
+        if len(set(lengths)) != 1:
+            show_error("Mismatch in number of masks and labels. Please rerun the segmentation on selected layer.")
+            return       
+        data = pd.DataFrame(label_layer.properties)
         collated_mask = collate_instance_masks(instance_masks)
 
         # Open a dialog to select the folder to save the files
@@ -466,13 +488,13 @@ class OrganoidAnalyzerWidget(QWidget):
             return
 
         # Save the data dictionary and collated mask as .npy files
-        data_file_path = os.path.join(folder, f"{self.segmentation_layer_name}_data.npy")
-        collated_mask_file_path = os.path.join(folder, f"{self.segmentation_layer_name}_collated_mask.npy")
+        data_file_path = os.path.join(folder, f"{self.label_layer_name}_features.csv")
+        collated_mask_file_path = os.path.join(folder, f"{self.label_layer_name}_collated_mask.npy")
 
-        np.save(data_file_path, data)
+        data.to_csv(data_file_path, index=False)
         np.save(collated_mask_file_path, collated_mask)
 
-        show_info(f"Masks exported successfully to:\n{data_file_path}\n{collated_mask_file_path}")
+        show_info(f"Masks & features exported successfully to:\n{data_file_path}\n{collated_mask_file_path}")
 
     def _on_model_selection_changed(self):
         """ Is called when user selects a new model from the dropdown menu. """
@@ -505,7 +527,7 @@ class OrganoidAnalyzerWidget(QWidget):
     def _rerun(self):
         """ Is called whenever user changes one of the two parameter sliders """
         # check if OrganoiDL instance exists - create it if not and set there current boxes, scores and ids    
-        print('Rerun called')    
+        print('Rerun called') 
         if self.organoiDL.img_scale[0]==0: self.organoiDL.set_scale(self.cur_shapes_layer.scale)
         self.organoiDL.update_next_id(self.cur_shapes_name, len(self.cur_shapes_layer.scale)+1)
         
@@ -514,11 +536,11 @@ class OrganoidAnalyzerWidget(QWidget):
             # first update bboxes in organoiDLin case user has added/removed
             self.organoiDL.update_bboxes_scores(self.cur_shapes_name,
                                                 self.cur_shapes_layer.data, 
-                                                self.cur_shapes_layer.properties['scores'],
+                                                self.cur_shapes_layer.properties['confidence'],
                                                 self.cur_shapes_layer.properties['box_id'])
             # and get new boxes, scores and box ids based on new confidence and min_diameter values 
             bboxes, scores, box_ids = self.organoiDL.apply_params(self.cur_shapes_name, self.confidence, self.min_diameter)
-            self._update_vis_bboxes(bboxes, scores, box_ids, self.cur_shapes_name)
+            self._update_detections(bboxes, scores, box_ids, self.cur_shapes_name)
 
     def _on_diameter_slider_changed(self):
         """ Is called whenever user changes the Minimum Diameter slider """
@@ -604,19 +626,6 @@ class OrganoidAnalyzerWidget(QWidget):
             # self.single_annotation_mode = False
             show_info("Switched to Multi Annotation mode.")
 
-    def _on_save_csv_click(self): 
-        """ Is called whenever Save features button is clicked """
-        bboxes = self.viewer.layers[self.save_layer_name].data
-        if not bboxes: show_info('No organoids detected! Please run auto organoid counter or run algorithm first and try again!')
-        else:
-            # write diameters and area to csv
-            data_csv = utils.get_bbox_diameters(bboxes, 
-                                          self.viewer.layers[self.save_layer_name].properties['box_id'],
-                                          self.viewer.layers[self.save_layer_name].scale)
-            fd = QFileDialog()
-            name, _ = fd.getSaveFileName(self, 'Save File', self.save_layer_name, 'CSV files (*.csv)')#, 'CSV Files (*.csv)')
-            if name: utils.write_to_csv(name, data_csv)
-
     def _on_save_json_click(self):
         """ Is called whenever Save boxes button is clicked """
         bboxes = self.viewer.layers[self.save_layer_name].data
@@ -663,7 +672,7 @@ class OrganoidAnalyzerWidget(QWidget):
 
         data_json = utils.get_bboxes_as_dict(bboxes, 
                                     self.viewer.layers[self.save_layer_name].properties['box_id'],
-                                    self.viewer.layers[self.save_layer_name].properties['scores'],
+                                    self.viewer.layers[self.save_layer_name].properties['confidence'],
                                     self.viewer.layers[self.save_layer_name].scale,
                                     labels=labels)
             
@@ -679,10 +688,7 @@ class OrganoidAnalyzerWidget(QWidget):
         Set the latest added image to the current working image (self.image_layer_name)
         """
         for layer_name in added_items:
-            if layer_name.startswith('Segmentation-'):
-                self.segmentation_mask_layer_selection.addItem(layer_name)
-            else:
-                self.image_layer_selection.addItem(layer_name)
+            self.image_layer_selection.addItem(layer_name)
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
         self.image_layer_name = added_items[0]
@@ -696,10 +702,6 @@ class OrganoidAnalyzerWidget(QWidget):
             item_id = self.image_layer_selection.findText(removed_layer)
             if item_id >= 0:
                 self.image_layer_selection.removeItem(item_id)
-            item_id = self.segmentation_mask_layer_selection.findText(removed_layer)
-            if item_id >= 0:
-                self.segmentation_mask_layer_selection.removeItem(item_id)
-                self.organoiDL.remove_shape_from_dict(removed_layer)
             del self.original_images[removed_layer]
             del self.original_contrast[removed_layer]
 
@@ -720,7 +722,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # listen for a data change in the current shapes layer
         self.organoiDL.update_bboxes_scores(self.cur_shapes_name,
                                             self.cur_shapes_layer.data,
-                                            self.cur_shapes_layer.properties['scores'],
+                                            self.cur_shapes_layer.properties['confidence'],
                                             self.cur_shapes_layer.properties['box_id']
                                             )
         self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
@@ -735,7 +737,7 @@ class OrganoidAnalyzerWidget(QWidget):
             self.output_layer_selection.removeItem(item_id)
             if removed_layer==self.cur_shapes_name: 
                 self._update_num_organoids(0)
-                self.organoiDL.remove_shape_from_dict(self.cur_shapes_name)
+            self.organoiDL.remove_shape_from_dict(removed_layer)
 
     def shapes_event_handler(self, event):
         """
@@ -755,7 +757,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self._update_num_organoids(len(new_ids))
 
         curr_next_id = self.organoiDL.next_id[self.cur_shapes_name]
-        new_scores = self.viewer.layers[self.cur_shapes_name].properties['scores']
+        new_scores = self.viewer.layers[self.cur_shapes_name].properties['confidence']
         if len(new_ids) != len(new_scores):
             print('[ERROR] Number of IDs and scores do not match!')
             show_error('Number of IDs and scores do not match!')
@@ -775,7 +777,8 @@ class OrganoidAnalyzerWidget(QWidget):
                     used_id.add(id_val)
 
             # set new properties to shapes layer
-            self.viewer.layers[self.cur_shapes_name].properties = {'box_id': new_ids, 'scores': new_scores}
+            self.viewer.layers[self.cur_shapes_name].properties['box_id'] =  new_ids
+            self.viewer.layers[self.cur_shapes_name].properties['confidence'] = new_scores
             # refresh text displayed
             self.viewer.layers[self.cur_shapes_name].refresh()
             self.viewer.layers[self.cur_shapes_name].refresh_text()
@@ -1026,7 +1029,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.confidence_slider.setValue(vis_confidence)
         self.confidence_slider.valueChanged.connect(self._on_confidence_slider_changed)
         # setup label
-        confidence_label = QLabel('Model confidence: ', self)
+        confidence_label = QLabel('confidence: ', self)
         confidence_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         # setup text box
         self.confidence_textbox = QLineEdit(self)
@@ -1066,9 +1069,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         #self.save_box = QGroupBox()
         hbox = QHBoxLayout()
-        # setup button for saving features
-        self.save_csv_btn = QPushButton("Save features")
-        self.save_csv_btn.clicked.connect(self._on_save_csv_click)
         # setup button for saving boxes
         self.save_json_btn = QPushButton("Save boxes")
         self.save_json_btn.clicked.connect(self._on_save_json_click)
@@ -1084,7 +1084,6 @@ class OrganoidAnalyzerWidget(QWidget):
         hbox.addWidget(self.save_label)
         hbox.addSpacing(5)
         hbox.addWidget(self.output_layer_selection)
-        hbox.addWidget(self.save_csv_btn)
         hbox.addWidget(self.save_json_btn)
         #self.save_box.setLayout(hbox)
         #self.save_box.setStyleSheet("border: 0px")
@@ -1125,46 +1124,47 @@ class OrganoidAnalyzerWidget(QWidget):
         run_segmentation_btn = QPushButton("Run Segmentation")
         run_segmentation_btn.clicked.connect(self._on_run_segmentation)
         run_segmentation_btn.setStyleSheet("border: 0px")
-        hbox_run.addWidget(run_segmentation_btn)
-        hbox_run.addStretch(1)
-        vbox.addLayout(hbox_run)
-        
-        segmentation_widget.setLayout(vbox)
-        return segmentation_widget
-    
-    def _setup_segmentation_export_widget(self):
-        """
-        Sets up the GUI part for segmentation configuration.
-        """
-        segmentation_widget = QGroupBox('Segmentation Mask Export')
-        vbox = QVBoxLayout()
-        
-        # Image layer selection
-        hbox_img = QHBoxLayout()
-        image_label = QLabel('Segmentation layer: ', self)
-        image_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-        self.segmentation_mask_layer_selection = QComboBox()
-        if self.image_layer_names is not None:
-            for name in self.image_layer_names:
-                if name.startswith('Segmentation-'):
-                    self.segmentation_mask_layer_selection.addItem(name)
-        self.segmentation_mask_layer_selection.currentIndexChanged.connect(self._on_segmentation_layer_change)
-        hbox_img.addWidget(image_label, 2)
-        hbox_img.addWidget(self.segmentation_mask_layer_selection, 4)
-        vbox.addLayout(hbox_img)
-        
-        # Run segmentation button
-        hbox_run = QHBoxLayout()
-        hbox_run.addStretch(1)
         export_segmentation_btn = QPushButton("Export masks")
         export_segmentation_btn.clicked.connect(self._on_export_masks)
         export_segmentation_btn.setStyleSheet("border: 0px")
+        hbox_run.addWidget(run_segmentation_btn)
+        hbox_run.addSpacing(15)
         hbox_run.addWidget(export_segmentation_btn)
-        hbox_run.addStretch(1)
-        vbox.addLayout(hbox_run)
-        
+        hbox_run.addStretch(1)   
+        vbox.addLayout(hbox_run)     
         segmentation_widget.setLayout(vbox)
         return segmentation_widget
+    
+    # def _setup_segmentation_export_widget(self):
+    #     """
+    #     Sets up the GUI part for segmentation configuration.
+    #     """
+    #     segmentation_widget = QGroupBox('Segmentation Mask Export')
+    #     vbox = QVBoxLayout()
+        
+    #     # Image layer selection
+    #     hbox_img = QHBoxLayout()
+    #     image_label = QLabel('Segmentation layer: ', self)
+    #     image_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+    #     self.segmentation_mask_layer_selection = QComboBox()
+    #     if self.image_layer_names is not None:
+    #         for name in self.image_layer_names:
+    #             if name.startswith('Segmentation-'):
+    #                 self.segmentation_mask_layer_selection.addItem(name)
+    #     self.segmentation_mask_layer_selection.currentIndexChanged.connect(self._on_segmentation_layer_change)
+    #     hbox_img.addWidget(image_label, 2)
+    #     hbox_img.addWidget(self.segmentation_mask_layer_selection, 4)
+    #     vbox.addLayout(hbox_img)
+        
+    #     # Run segmentation button
+    #     hbox_run = QHBoxLayout()
+    #     hbox_run.addStretch(1)
+    #     hbox_run.addWidget(export_segmentation_btn)
+    #     hbox_run.addStretch(1)
+    #     vbox.addLayout(hbox_run)
+        
+    #     segmentation_widget.setLayout(vbox)
+    #     return segmentation_widget
     
     def _on_labels_layer_change(self):
         """
@@ -1172,11 +1172,11 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         self.label_layer_name = self.segmentation_image_layer_selection.currentText()
 
-    def _on_segmentation_layer_change(self):
-        """
-        Called when user changes layer of labels used for segmentation
-        """
-        self.segmentation_layer_name = self.segmentation_mask_layer_selection.currentText()
+    # def _on_segmentation_layer_change(self):
+    #     """
+    #     Called when user changes layer of labels used for segmentation
+    #     """
+    #     self.segmentation_layer_name = self.segmentation_mask_layer_selection.currentText()
     
     def _on_layer_name_change(self, event):
         """
@@ -1192,6 +1192,64 @@ class OrganoidAnalyzerWidget(QWidget):
         self.image_layer_selection.clear()
         for name in self._get_layer_names(layer_type=layers.Image):
             self.image_layer_selection.addItem(name)
+
+        # TODO: Handle layer name change 
+
+    def _on_shape_selected(self, event):
+        """
+        Called when user changes the selection of a shape in layer
+        """
+        print("[INFO] Shape selection changed")
+        if self.cur_shapes_layer is not None and len(self.cur_shapes_layer.selected_data) != 0:
+            self._update_detection_data_tab()
+        
+    def _update_detection_data_tab(self):
+        """
+        Updates the "Detection data" tab based on the current shapes layer and selected data.
+        """
+        self.detection_data_tree.clear()  # Clear previous data
+        if self.cur_shapes_layer and self.cur_shapes_layer.selected_data:
+            self.tab_widget.setTabEnabled(1, True)
+            for index in self.cur_shapes_layer.selected_data:
+                # Create a top-level item for each selected shape
+                top_item = QTreeWidgetItem(self.detection_data_tree)
+                top_item.setText(0, f"Detection ID {self.cur_shapes_layer.properties['box_id'][index]}")
+                top_item.setExpanded(False)
+
+                # Add properties as child items
+                for prop_name, prop_values in self.cur_shapes_layer.properties.items():
+                    if prop_name != 'box_id':
+                        child_item = QTreeWidgetItem(top_item)
+                        child_item.setText(0, prop_name)
+                        child_item.setText(1, str(prop_values[index]))
+            self.detection_data_tree.expandAll()
+        else:
+            self.tab_widget.setTabEnabled(1, False)
+
+    def _export_detection_data_to_csv(self):
+        """
+        Export the detection data displayed in the "Detection data" tab to a CSV file.
+        """
+        if not self.cur_shapes_layer or not self.cur_shapes_layer.selected_data:
+            show_warning("No detection data to export.")
+            return
+        data = []
+        for index in self.cur_shapes_layer.selected_data:
+            row = {}
+            for prop_name, prop_values in self.cur_shapes_layer.properties.items():
+                    row[prop_name] = prop_values[index]
+            data.append(row)
+
+        # Convert to pandas DataFrame
+        df = pd.DataFrame(data)
+
+        # Open a dialog to select the file to save
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Detection Data", "detection_data.csv", "CSV files (*.csv)")
+        if file_path:
+            df.to_csv(file_path, index=False)
+            show_info(f"Detection data exported successfully to {file_path}.")
+        else:
+            show_warning("Export canceled.")
 
 class ConfirmUpload(QDialog):
     '''

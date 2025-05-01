@@ -10,8 +10,9 @@ import mmdet
 from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
-from napari_organoid_analyzer._SAMOS.util.box_ops_numpy import cxcywh_to_xyxy
+import cv2
 import sys
+import logging
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 class OrganoiDL():
@@ -254,7 +255,36 @@ class OrganoiDL():
             pred_mask = np.squeeze(pred_mask.cpu().numpy().astype(np.uint8))
 
         self.pred_masks[mask_name] = pred_mask
-        return pred_mask
+        features = []
+        for idx, mask in enumerate(pred_mask):
+            features.append(self._compute_features(mask, idx))
+        features = {key: [feature[key] for feature in features] for key in features[0]}
+        return pred_mask, features
+    
+    def _compute_features(self, mask, idx):
+        """
+        Computes mask-based features for detected organoids
+        
+        Inputs
+        ----------
+        mask: Numpy array of size [H, W]
+            The mask of a single organoid detection
+        """
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) != 1:
+            logging.error(f"Expected 1 contour, found {len(contours)} for mask {idx}")
+        area = cv2.contourArea(contours[0])
+        perimeter = cv2.arcLength(contours[0], True)
+        if perimeter > 0:
+            roundness = (4 * np.pi * area) / (perimeter ** 2)
+        else:
+            roundness = 0
+        return {
+            'Area': area,
+            'Perimeter': perimeter,
+            'Roundness': roundness
+        }
 
 
     def apply_params(self, shapes_name, confidence, min_diameter_um):
@@ -297,7 +327,7 @@ class OrganoiDL():
         If the shapes name doesn't exist as a key in the dicts the results are added with the new key. If the
         key exists then new_bboxes, new_scores and new_ids are compared to the class result dicts and the dicts 
         are updated, either by adding some box (user added box) or removing some box (user deleted a prediction).'''
-        
+
         new_bboxes = convert_boxes_from_napari_view(new_bboxes)
         new_scores =  torch.Tensor(list(new_scores))
         new_ids = list(new_ids)
@@ -313,7 +343,7 @@ class OrganoiDL():
         else:
             min_diameter_x = self.cur_min_diam / self.img_scale[0]
             min_diameter_y = self.cur_min_diam / self.img_scale[1]
-            # find ids that do are not in self.pred_ids but are in new_ids
+            # find ids that are not in self.pred_ids but are in new_ids
             added_box_ids = list(set(new_ids).difference(self.pred_ids[shapes_name]))
             if len(added_box_ids) > 0:
                 added_ids = [new_ids.index(box_id) for box_id in added_box_ids]
