@@ -776,8 +776,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     used_id.add(id_val)
 
             # set new properties to shapes layer
-            self.viewer.layers[self.cur_shapes_name].properties['box_id'] =  new_ids
-            self.viewer.layers[self.cur_shapes_name].properties['confidence'] = new_scores
+            self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores}
             # refresh text displayed
             self.viewer.layers[self.cur_shapes_name].refresh()
             self.viewer.layers[self.cur_shapes_name].refresh_text()
