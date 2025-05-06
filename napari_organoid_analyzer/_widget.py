@@ -310,8 +310,11 @@ class OrganoidAnalyzerWidget(QWidget):
         # if layer already exists
         if labels_layer_name in self.shape_layer_names: 
             self.viewer.layers[labels_layer_name].data = bboxes # hack to get edge_width stay the same!
-            self.viewer.layers[labels_layer_name].properties['box_id'] = box_ids
-            self.viewer.layers[labels_layer_name].properties['confidence'] = scores
+            # IMPORTANT!!! Assignment of properties is possible only in its entirety. Example code below would not work
+            # self.viewer.layers[labels_layer_name].properties['box_id'] = box_ids
+            # self.viewer.layers[labels_layer_name].properties['confidence'] = scores
+            self.viewer.layers[labels_layer_name].properties = { 'box_id': box_ids, 
+                                                                'confidence': scores}
             self.viewer.layers[labels_layer_name].edge_width = 12
             self.viewer.layers[labels_layer_name].refresh()
             self.viewer.layers[labels_layer_name].refresh_text()
@@ -328,7 +331,6 @@ class OrganoidAnalyzerWidget(QWidget):
                                'size': 12,
                                'anchor': 'upper_left',
                                'color': settings.TEXT_COLOR}
-                print(text_params['string'])
                 self.cur_shapes_layer = self.viewer.add_shapes(bboxes, 
                                                                name=labels_layer_name,
                                                                scale=self.viewer.layers[self.image_layer_name].scale,
@@ -527,7 +529,6 @@ class OrganoidAnalyzerWidget(QWidget):
     def _rerun(self):
         """ Is called whenever user changes one of the two parameter sliders """
         # check if OrganoiDL instance exists - create it if not and set there current boxes, scores and ids    
-        print('Rerun called') 
         if self.organoiDL.img_scale[0]==0: self.organoiDL.set_scale(self.cur_shapes_layer.scale)
         self.organoiDL.update_next_id(self.cur_shapes_name, len(self.cur_shapes_layer.scale)+1)
         
@@ -743,7 +744,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         This function will be called every time the current shapes layer data changes
         """
-        print("Called shapes_event_handler")
         # make sure this stuff isn't done if data in the layer has been changed by the sliders - only by the users
         key = 'napari-organoid-counter:_rerun'
         if key in self.cur_shapes_layer.metadata: 
@@ -753,7 +753,6 @@ class OrganoidAnalyzerWidget(QWidget):
         new_ids = self.viewer.layers[self.cur_shapes_name].properties['box_id']
         new_bboxes = self.viewer.layers[self.cur_shapes_name].data
 
-        print(f"New bboxes: {new_bboxes}, new ids: {new_ids}")
         self._update_num_organoids(len(new_ids))
 
         curr_next_id = self.organoiDL.next_id[self.cur_shapes_name]
@@ -1199,7 +1198,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         Called when user changes the selection of a shape in layer
         """
-        print("[INFO] Shape selection changed")
         if self.cur_shapes_layer is not None and len(self.cur_shapes_layer.selected_data) != 0:
             self._update_detection_data_tab()
         
