@@ -15,7 +15,7 @@ from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, coll
 import numpy as np
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QComboBox, QPushButton, QLineEdit, QProgressBar, QSlider, QTabWidget, QTreeWidget, QTreeWidgetItem
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QComboBox, QPushButton, QLineEdit, QProgressBar, QSlider, QTabWidget, QTreeWidget, QTreeWidgetItem, QCheckBox
 
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
@@ -461,9 +461,10 @@ class OrganoidAnalyzerWidget(QWidget):
         self._update_detection_data_tab()
         show_info("Segmentation completed and added to the viewer.")
 
-    def _on_export_masks(self):
+    def _on_export_click(self):
         """
-        Runs when user wants to export masks from the segmentation layer. Saves instance masks and a single collated mask as npy files.
+        Runs when the Export button is clicked to open the export dialog
+        and handle the user's selections.
         """
         if not self.label_layer_name:
             show_error("No label layer selected. Please select a label layer and try again.")
@@ -473,29 +474,149 @@ class OrganoidAnalyzerWidget(QWidget):
         if label_layer is None:
             show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
             return
-
-        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+        
         lengths = [len(v) for v in label_layer.properties.values()]
         if len(set(lengths)) != 1:
             show_error("Mismatch in number of masks and labels. Please rerun the segmentation on selected layer.")
-            return       
-        data = pd.DataFrame(label_layer.properties)
-        collated_mask = collate_instance_masks(instance_masks)
+            return
+        
+        # Get available features from the layer properties
+        available_features = []
+        if hasattr(label_layer, 'properties') and label_layer.properties:
+            available_features = [k for k in label_layer.properties.keys()]
+        
+        # Open the export dialog
+        export_dialog = ExportDialog(self, available_features)
+        if export_dialog.exec_() != QDialog.Accepted:
+            show_warning("Export canceled.")
+            return
+        
+        export_path = export_dialog.get_export_path()
+        if not export_path:
+            show_error("No export folder selected.")
+            return
+        
+        export_options = export_dialog.get_export_options()
+        selected_features = export_dialog.get_selected_features()
+        
+        exported_items = []
+        
+        # Process export based on selected options
+        if export_options['bboxes']:
+            self._export_bboxes(label_layer, export_path)
+            exported_items.append("bounding boxes")
+        
+        if export_options['instance_masks']:
+            self._export_instance_masks(label_layer, export_path)
+            exported_items.append("instance masks")
 
-        # Open a dialog to select the folder to save the files
-        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Save Masks")
-        if not folder:
-            show_warning("No folder selected. Export canceled.")
+        if export_options['collated_mask']:
+            self._export_collated_masks(label_layer, export_path)
+            exported_items.append("collated mask")
+        
+        if export_options['features']:
+            self._export_features(label_layer, export_path, selected_features)
+            exported_items.append("features")
+        
+        if exported_items:
+            show_info(f"Export completed successfully to {export_path}\nExported: {', '.join(exported_items)}")
+        else:
+            show_warning("No items were selected for export.")
+
+    def _export_bboxes(self, label_layer, export_path):
+        """Export bounding boxes to JSON file"""
+        bboxes = label_layer.data
+        
+        if len(bboxes) == 0: 
+            show_warning('No organoids detected! Skipping bounding box export.')
+            return
+        
+        # Check for multi-annotation mode
+        if self.multi_annotation_mode:
+            # Get the edge colors for all bounding boxes
+            edge_colors = label_layer.edge_color
+            labels = []
+
+            # Check if all bounding boxes have their edge color set
+            green = np.array(settings.COLOR_CLASS_1)
+            blue = np.array(settings.COLOR_CLASS_2)
+
+            all_colored = True
+            for edge_color in edge_colors:
+                if not (np.allclose(edge_color[:3], green[:3]) or np.allclose(edge_color[:3], blue[:3])):
+                    all_colored = False
+                    break
+
+            if not all_colored:
+                show_warning('Not all bounding boxes have a color assigned. Using default labels.')
+                labels = [0] * len(bboxes)
+            else:
+                # Assign organoid label based on edge_color
+                for edge_color in edge_colors:
+                    if np.allclose(edge_color[:3], green[:3]):
+                        labels.append(0)  # Label for green
+                    elif np.allclose(edge_color[:3], blue[:3]):
+                        labels.append(1)  # Label for blue
+                    else:
+                        labels.append(0)  # Default label
+        else:
+            # Single annotation mode: all bounding boxes get a default label
+            labels = [0] * len(bboxes)
+
+        data_json = utils.get_bboxes_as_dict(
+            bboxes, 
+            label_layer.properties['box_id'],
+            label_layer.properties['confidence'],
+            label_layer.scale,
+            labels=labels
+        )
+            
+        # Write bbox coordinates to json
+        json_file_path = os.path.join(export_path, f"{self.label_layer_name}_bboxes.json")
+        utils.write_to_json(json_file_path, data_json)
+
+    def _export_instance_masks(self, label_layer, export_path):
+        """Export instance masks to NPY"""
+        
+        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+        if len(instance_masks) == 0:
+            show_warning("No masks found for segmentation. Skipping mask export.")
+            return
+        
+        # Export instance masksy
+        box_ids = label_layer.properties['box_id']
+        mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
+            
+        instance_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_instance_masks.npy")
+        np.save(instance_mask_file_path, mask_dict)
+
+    def _export_collated_masks(self, label_layer, export_path):
+        """Export collated mask to NPY"""
+        
+        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+        if len(instance_masks) == 0:
+            show_warning("No masks found for segmentation. Skipping mask export.")
             return
 
-        # Save the data dictionary and collated mask as .npy files
-        data_file_path = os.path.join(folder, f"{self.label_layer_name}_features.csv")
-        collated_mask_file_path = os.path.join(folder, f"{self.label_layer_name}_collated_mask.npy")
-
-        data.to_csv(data_file_path, index=False)
+        collated_mask = collate_instance_masks(instance_masks)
+        collated_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_collated_mask.npy")
         np.save(collated_mask_file_path, collated_mask)
 
-        show_info(f"Masks & features exported successfully to:\n{data_file_path}\n{collated_mask_file_path}")
+    def _export_features(self, label_layer, export_path, selected_features):
+        """Export selected features to CSV"""
+        # Extract only the selected features
+        features_to_export = {}
+        for feature, selected in selected_features.items():
+            if selected and feature in label_layer.properties:
+                features_to_export[feature] = label_layer.properties[feature]
+        
+        # Convert to pandas DataFrame
+        if features_to_export:
+            df = pd.DataFrame(features_to_export)
+            features_file_path = os.path.join(export_path, f"{self.label_layer_name}_features.csv")
+            df.to_csv(features_file_path, index=False)
+        else:
+            show_warning("No features selected for export or no features available.")
 
     def _on_model_selection_changed(self):
         """ Is called when user selects a new model from the dropdown menu. """
@@ -621,71 +742,6 @@ class OrganoidAnalyzerWidget(QWidget):
             self.multi_annotation_mode = True
             # self.single_annotation_mode = False
             show_info("Switched to Multi Annotation mode.")
-
-    def _on_save_json_click(self):
-        """ Is called whenever Save boxes button is clicked """
-        if not self.label_layer_name:
-            show_error("No label layer selected. Please select a label layer and try again.")
-            return
-
-        current_label_layer = self.viewer.layers.get(self.label_layer_name, None)
-        if current_label_layer is None:
-            show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
-            return
-
-        bboxes = current_label_layer.data
-        
-        if not bboxes.any(): 
-            show_info('No organoids detected! Please run auto organoid counter or run algorithm first and try again!')
-            return
-        
-        # Check for multi-annotation mode
-        if self.multi_annotation_mode:
-
-            # Get the edge colors for all bounding boxes
-            edge_colors = current_label_layer.edge_color
-            labels = []
-
-            # Check if all bounding boxes have their edge color set (not green or blue)
-            green = np.array(settings.COLOR_CLASS_1)
-            blue = np.array(settings.COLOR_CLASS_2)
-
-            all_colored = True
-            for edge_color in edge_colors:
-                # Compare the colors with a tolerance using np.allclose to account for floating-point errors
-                if not (np.allclose(edge_color[:3], green[:3]) or np.allclose(edge_color[:3], blue[:3])):
-                    all_colored = False
-                    break
-
-            if not all_colored:
-                show_error('Please change the color of all bounding boxes before saving.')
-                return
-            
-            # Assign organoid label based on edge_color
-            for edge_color in edge_colors:
-                if np.allclose(edge_color[:3], green[:3]):
-                    labels.append(0)  # Label for green
-                elif np.allclose(edge_color[:3], blue[:3]):
-                    labels.append(1)  # Label for blue
-                else:
-                    raise ValueError(f"Unexpected edge color {edge_color[:3]} encountered.")
-
-        #elif self.single_annotation_mode:
-        else:
-            # Single annotation mode: all bounding boxes get a default label
-            labels = [0] * len(bboxes)  # Default label for single annotation mode
-
-        data_json = utils.get_bboxes_as_dict(bboxes, 
-                                    current_label_layer.properties['box_id'],
-                                    current_label_layer.properties['confidence'],
-                                    current_label_layer.scale,
-                                    labels=labels)
-            
-        
-        # write bbox coordinates to json
-        fd = QFileDialog()
-        name,_ = fd.getSaveFileName(self, 'Save File', self.label_layer_name, 'JSON files (*.json)')#, 'CSV Files (*.csv)')
-        if name: utils.write_to_json(name, data_json)
 
     def _update_added_image(self, added_items):
         """
@@ -1089,17 +1145,12 @@ class OrganoidAnalyzerWidget(QWidget):
         run_segmentation_btn = QPushButton("Run Segmentation")
         run_segmentation_btn.clicked.connect(self._on_run_segmentation)
         run_segmentation_btn.setStyleSheet("border: 0px")
-        export_segmentation_btn = QPushButton("Export masks")
-        export_segmentation_btn.clicked.connect(self._on_export_masks)
-        export_segmentation_btn.setStyleSheet("border: 0px")
-        save_json_btn = QPushButton("Save boxes")
-        save_json_btn.clicked.connect(self._on_save_json_click)
-        save_json_btn.setStyleSheet("border: 0px")
+        export_btn = QPushButton("Export data")
+        export_btn.clicked.connect(self._on_export_click)
+        export_btn.setStyleSheet("border: 0px")
         hbox_run.addWidget(run_segmentation_btn)
         hbox_run.addSpacing(15)
-        hbox_run.addWidget(export_segmentation_btn)
-        hbox_run.addSpacing(15)
-        hbox_run.addWidget(save_json_btn)
+        hbox_run.addWidget(export_btn)
         hbox_run.addStretch(1)   
         vbox.addLayout(hbox_run)     
         segmentation_widget.setLayout(vbox)
@@ -1189,6 +1240,106 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info(f"Detection data exported successfully to {file_path}.")
         else:
             show_warning("Export canceled.")
+
+class ExportDialog(QDialog):
+    """
+    Dialog for selecting export options
+    """
+    def __init__(self, parent, available_features):
+        super().__init__(parent)
+        self.setWindowTitle("Export Options")
+        self.setMinimumWidth(500)
+        
+        # Main layout
+        layout = QVBoxLayout()
+        
+        # Export path selection
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("Export to folder:"))
+        self.path_input = QLineEdit()
+        path_layout.addWidget(self.path_input, 1)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._browse_folder)
+        path_layout.addWidget(browse_button)
+        layout.addLayout(path_layout)
+        
+        # What to export
+        layout.addWidget(QLabel("Select what to export:"))
+        
+        # Export options layout (left side of the bottom part)
+        options_layout = QVBoxLayout()
+        
+        # Checkboxes for export options
+        self.export_bboxes = QCheckBox("Bounding boxes (JSON)")
+        self.export_bboxes.setChecked(True)
+        self.export_instance_masks = QCheckBox("Instance masks (NPY)")
+        self.export_instance_masks.setChecked(True)
+        self.export_collated_mask = QCheckBox("Collated mask (NPY)")
+        self.export_collated_mask.setChecked(True)
+        self.export_features = QCheckBox("Features (CSV)")
+        self.export_features.setChecked(True)
+        self.export_features.stateChanged.connect(self._toggle_feature_selection)
+        
+        options_layout.addWidget(self.export_bboxes)
+        options_layout.addWidget(self.export_instance_masks)
+        options_layout.addWidget(self.export_collated_mask)
+        options_layout.addWidget(self.export_features)
+        
+        # Bottom part with options on left and feature selection on right
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addLayout(options_layout)
+        
+        # Feature selection (right side)
+        self.feature_selection_widget = QWidget()
+        feature_layout = QVBoxLayout()
+        feature_layout.addWidget(QLabel("Select features to export:"))
+        
+        self.feature_checkboxes = {}
+        for feature in available_features:
+            checkbox = QCheckBox(feature)
+            checkbox.setChecked(True)  # Default checked
+            self.feature_checkboxes[feature] = checkbox
+            feature_layout.addWidget(checkbox)
+        
+        feature_layout.addStretch()
+        self.feature_selection_widget.setLayout(feature_layout)
+        bottom_layout.addWidget(self.feature_selection_widget)
+        layout.addLayout(bottom_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        export_button = QPushButton("Export")
+        export_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(export_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
+        if folder:
+            self.path_input.setText(folder)
+    
+    def _toggle_feature_selection(self, state):
+        self.feature_selection_widget.setVisible(state == Qt.Checked)
+    
+    def get_export_path(self):
+        return self.path_input.text()
+    
+    def get_export_options(self):
+        return {
+            'bboxes': self.export_bboxes.isChecked(),
+            'instance_masks': self.export_instance_masks.isChecked(),
+            'collated_mask': self.export_collated_mask.isChecked(),
+            'features': self.export_features.isChecked()
+        }
+    
+    def get_selected_features(self):
+        return {feature: checkbox.isChecked() 
+                for feature, checkbox in self.feature_checkboxes.items()}
 
 class ConfirmUpload(QDialog):
     '''
