@@ -101,7 +101,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.image_layer_name = None
         self.label_layer_name = None
         self.shape_layer_names = []
-        self.save_layer_name = ''
         self.cur_shapes_name = ''
         self.cur_shapes_layer = None
         self.num_organoids = 0
@@ -590,10 +589,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """ Is called whenever a new image has been selected from the drop down box """
         self.image_layer_name = self.image_layer_selection.currentText()
     
-    def _on_shapes_selection_changed(self):
-        """ Is called whenever a new shapes layer has been selected from the drop down box """
-        self.save_layer_name = self.output_layer_selection.currentText()
-
     def _on_reset_click(self):
         """ Is called whenever Reset Configs button is clicked """
         # reset params
@@ -629,9 +624,18 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _on_save_json_click(self):
         """ Is called whenever Save boxes button is clicked """
-        bboxes = self.viewer.layers[self.save_layer_name].data
-        #scores = #add
-        if not bboxes: 
+        if not self.label_layer_name:
+            show_error("No label layer selected. Please select a label layer and try again.")
+            return
+
+        current_label_layer = self.viewer.layers.get(self.label_layer_name, None)
+        if current_label_layer is None:
+            show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
+            return
+
+        bboxes = current_label_layer.data
+        
+        if not bboxes.any(): 
             show_info('No organoids detected! Please run auto organoid counter or run algorithm first and try again!')
             return
         
@@ -639,7 +643,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if self.multi_annotation_mode:
 
             # Get the edge colors for all bounding boxes
-            edge_colors = self.cur_shapes_layer.edge_color
+            edge_colors = current_label_layer.edge_color
             labels = []
 
             # Check if all bounding boxes have their edge color set (not green or blue)
@@ -672,15 +676,15 @@ class OrganoidAnalyzerWidget(QWidget):
             labels = [0] * len(bboxes)  # Default label for single annotation mode
 
         data_json = utils.get_bboxes_as_dict(bboxes, 
-                                    self.viewer.layers[self.save_layer_name].properties['box_id'],
-                                    self.viewer.layers[self.save_layer_name].properties['confidence'],
-                                    self.viewer.layers[self.save_layer_name].scale,
+                                    current_label_layer.properties['box_id'],
+                                    current_label_layer.properties['confidence'],
+                                    current_label_layer.scale,
                                     labels=labels)
             
         
         # write bbox coordinates to json
         fd = QFileDialog()
-        name,_ = fd.getSaveFileName(self, 'Save File', self.save_layer_name, 'JSON files (*.json)')#, 'CSV Files (*.csv)')
+        name,_ = fd.getSaveFileName(self, 'Save File', self.label_layer_name, 'JSON files (*.json)')#, 'CSV Files (*.csv)')
         if name: utils.write_to_json(name, data_json)
 
     def _update_added_image(self, added_items):
@@ -712,10 +716,8 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         # update the drop down box displaying shape layer names for saving
         for layer_name in added_items:
-            self.output_layer_selection.addItem(layer_name)
             self.segmentation_image_layer_selection.addItem(layer_name)
         # set the latest added shapes layer to the shapes layer that has been selected for saving and visualisation
-        self.save_layer_name = added_items[0]
         self.cur_shapes_name = added_items[0]
         self.cur_shapes_layer = self.viewer.layers[self.cur_shapes_name] 
         # get the bounding box and update the displayed number of organoids
@@ -734,8 +736,8 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         # update selection box by removing image names if image has been deleted       
         for removed_layer in removed_layers:
-            item_id = self.output_layer_selection.findText(removed_layer)
-            self.output_layer_selection.removeItem(item_id)
+            item_id = self.segmentation_image_layer_selection.findText(removed_layer)
+            self.segmentation_image_layer_selection.removeItem(item_id)
             if removed_layer==self.cur_shapes_name: 
                 self._update_num_organoids(0)
             self.organoiDL.remove_shape_from_dict(removed_layer)
@@ -776,7 +778,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     used_id.add(id_val)
 
             # set new properties to shapes layer
-            self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores}
+            self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores }
             # refresh text displayed
             self.viewer.layers[self.cur_shapes_name].refresh()
             self.viewer.layers[self.cur_shapes_name].refresh_text()
@@ -828,7 +830,6 @@ class OrganoidAnalyzerWidget(QWidget):
         vbox.addLayout(self._setup_confidence_box() )
         vbox.addWidget(self.organoid_number_label)
         vbox.addLayout(self._setup_reset_box())
-        vbox.addLayout(self._setup_save_box())
         
         output_widget.setLayout(vbox)
         return output_widget
@@ -1061,40 +1062,6 @@ class OrganoidAnalyzerWidget(QWidget):
         #self.reset_box.setStyleSheet("border: 0px")
         return hbox
 
-    def _setup_save_box(self):
-        """
-        Sets up the GUI part where shapes layer is saved 
-        """
-        #self.save_box = QGroupBox()
-        hbox = QHBoxLayout()
-        # setup button for saving boxes
-        self.save_json_btn = QPushButton("Save boxes")
-        self.save_json_btn.clicked.connect(self._on_save_json_click)
-        # setup label
-        self.save_label = QLabel('Save: ', self)
-        self.save_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-        # setup drop down option for selecting which shapes layer to save
-        self.output_layer_selection = QComboBox()
-        if self.shape_layer_names is not None:
-            for name in self.shape_layer_names: self.output_layer_selection.addItem(name)
-        self.output_layer_selection.currentIndexChanged.connect(self._on_shapes_selection_changed)
-        # and add all these to the layout
-        hbox.addWidget(self.save_label)
-        hbox.addSpacing(5)
-        hbox.addWidget(self.output_layer_selection)
-        hbox.addWidget(self.save_json_btn)
-        #self.save_box.setLayout(hbox)
-        #self.save_box.setStyleSheet("border: 0px")
-        return hbox
-
-    def _get_layer_names(self, layer_type: layers.Layer = layers.Image) -> List[str]:
-        """
-        Get a list of layer names of a given layer type.
-        """
-        layer_names = [layer.name for layer in self.viewer.layers if type(layer) == layer_type]
-        if layer_names: return [] + layer_names
-        else: return []
-
     def _setup_segmentation_widget(self):
         """
         Sets up the GUI part for segmentation configuration.
@@ -1125,56 +1092,32 @@ class OrganoidAnalyzerWidget(QWidget):
         export_segmentation_btn = QPushButton("Export masks")
         export_segmentation_btn.clicked.connect(self._on_export_masks)
         export_segmentation_btn.setStyleSheet("border: 0px")
+        save_json_btn = QPushButton("Save boxes")
+        save_json_btn.clicked.connect(self._on_save_json_click)
+        save_json_btn.setStyleSheet("border: 0px")
         hbox_run.addWidget(run_segmentation_btn)
         hbox_run.addSpacing(15)
         hbox_run.addWidget(export_segmentation_btn)
+        hbox_run.addSpacing(15)
+        hbox_run.addWidget(save_json_btn)
         hbox_run.addStretch(1)   
         vbox.addLayout(hbox_run)     
         segmentation_widget.setLayout(vbox)
         return segmentation_widget
-    
-    # def _setup_segmentation_export_widget(self):
-    #     """
-    #     Sets up the GUI part for segmentation configuration.
-    #     """
-    #     segmentation_widget = QGroupBox('Segmentation Mask Export')
-    #     vbox = QVBoxLayout()
-        
-    #     # Image layer selection
-    #     hbox_img = QHBoxLayout()
-    #     image_label = QLabel('Segmentation layer: ', self)
-    #     image_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-    #     self.segmentation_mask_layer_selection = QComboBox()
-    #     if self.image_layer_names is not None:
-    #         for name in self.image_layer_names:
-    #             if name.startswith('Segmentation-'):
-    #                 self.segmentation_mask_layer_selection.addItem(name)
-    #     self.segmentation_mask_layer_selection.currentIndexChanged.connect(self._on_segmentation_layer_change)
-    #     hbox_img.addWidget(image_label, 2)
-    #     hbox_img.addWidget(self.segmentation_mask_layer_selection, 4)
-    #     vbox.addLayout(hbox_img)
-        
-    #     # Run segmentation button
-    #     hbox_run = QHBoxLayout()
-    #     hbox_run.addStretch(1)
-    #     hbox_run.addWidget(export_segmentation_btn)
-    #     hbox_run.addStretch(1)
-    #     vbox.addLayout(hbox_run)
-        
-    #     segmentation_widget.setLayout(vbox)
-    #     return segmentation_widget
-    
+
+    def _get_layer_names(self, layer_type: layers.Layer = layers.Image) -> List[str]:
+        """
+        Get a list of layer names of a given layer type.
+        """
+        layer_names = [layer.name for layer in self.viewer.layers if type(layer) == layer_type]
+        if layer_names: return [] + layer_names
+        else: return []
+
     def _on_labels_layer_change(self):
         """
         Called when user changes layer of labels used for segmentation
         """
         self.label_layer_name = self.segmentation_image_layer_selection.currentText()
-
-    # def _on_segmentation_layer_change(self):
-    #     """
-    #     Called when user changes layer of labels used for segmentation
-    #     """
-    #     self.segmentation_layer_name = self.segmentation_mask_layer_selection.currentText()
     
     def _on_layer_name_change(self, event):
         """
@@ -1182,9 +1125,8 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         
         # Update selectors for image and shapes layers
-        self.output_layer_selection.clear()
+        self.segmentation_image_layer_selection.clear()
         for name in self._get_layer_names(layer_type=layers.Shapes): 
-            self.output_layer_selection.addItem(name)
             self.segmentation_image_layer_selection.addItem(name)
 
         self.image_layer_selection.clear()
