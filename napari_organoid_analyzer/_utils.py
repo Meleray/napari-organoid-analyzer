@@ -15,13 +15,25 @@ from torchvision.ops import nms
 
 from napari_organoid_analyzer import settings
 
-def collate_instance_masks(masks):
+def collate_instance_masks(masks, color=False):
     """
-    Merges instance-based masks into a single mask.
+    Merges instance-based masks into a single RGB image where each instance has a random color.
     Args:
         masks np.ndarray: List of binary masks for each instance of dimension [N, H, W]
+    
+    Returns:
+        np.ndarray: RGB image of dimension [H, W, 3] where each instance has a unique random color
     """
-    return np.any(masks, axis=0)
+    if not color:
+        return np.any(masks, axis=0)
+    
+    num_instances, height, width = masks.shape
+    result = np.zeros((height, width, 3), dtype=np.uint8)
+    colors = np.random.randint(0, 256, (num_instances, 3))
+    for i in range(num_instances):
+        for c in range(3):
+            result[:, :, c] = np.where(masks[i], colors[i, c], result[:, :, c])
+    return result
 
 def add_local_models():
     """ Checks the models directory for any local models previously added by the user.
@@ -167,7 +179,7 @@ def convert_boxes_from_napari_view(pred_bboxes):
         # convert to tensor and append to list
         new_boxes.append(torch.Tensor([x1, y1, x2, y2]))
     if len(new_boxes) > 0: new_boxes = torch.stack(new_boxes)
-    return new_boxes
+    return torch.Tensor(new_boxes)
 
 def apply_normalization(img):
     """ Normalize image"""

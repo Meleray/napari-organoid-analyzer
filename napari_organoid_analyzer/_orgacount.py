@@ -52,13 +52,14 @@ class OrganoiDL():
         self.cur_confidence = 0.05
         self.cur_min_diam = 30
         self.model = None
-        self.sam_predictor = None
         self.img_scale = [0., 0.]
         self.pred_bboxes = {}
         self.pred_scores = {}
         self.pred_masks = {}
         self.pred_ids = {}
         self.next_id = {}
+        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.UTIL_DIR), settings.SAM_MODEL["filename"]))
+        self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
 
     def set_scale(self, img_scale):
         ''' Set the image scale: used to calculate real box sizes. '''
@@ -68,8 +69,6 @@ class OrganoiDL():
         ''' Initialise  model instance and load model checkpoint and send to device. '''
         self.model_name = model_name
         model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
-        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.UTIL_DIR), settings.SAM_MODEL["filename"]))
-        self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
         if model_name == 'SAMOS':
             checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
             self.model = DetectionTransformer(**checkpoint['hyper_parameters'])
@@ -151,9 +150,11 @@ class OrganoiDL():
                     output = self.model(img_crop)
                     bboxes = output['predictions'][0]['bboxes']
                     scores = output['predictions'][0]['scores']
-                print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
-                if len(bboxes)==0: continue
+                if len(bboxes)==0:
+                    print(f"Step ({i},{j}): No predictions")
+                    continue
                 else:
+                    print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
                     for bbox_id in range(len(bboxes)):
                         y1, x1, y2, x2 = bboxes[bbox_id] # predictions from model will be in form x1,y1,x2,y2
                         x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor')
@@ -300,8 +301,9 @@ class OrganoiDL():
 
     def _apply_confidence_thresh(self, shapes_name):
         """ Filters out results of shapes_name based on the current confidence threshold. """
-        if shapes_name not in self.pred_bboxes.keys(): return torch.empty((0))
+        if shapes_name not in self.pred_bboxes.keys(): return torch.empty((0)), torch.empty((0)), []
         keep = (self.pred_scores[shapes_name]>self.cur_confidence).nonzero(as_tuple=True)[0]
+        if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
         result_bboxes = self.pred_bboxes[shapes_name][keep]
         result_scores = self.pred_scores[shapes_name][keep]
         result_ids = [self.pred_ids[shapes_name][int(i)] for i in keep.tolist()]
@@ -309,14 +311,14 @@ class OrganoiDL():
     
     def _filter_small_organoids(self, pred_bboxes, pred_scores, pred_ids):
         """ Filters out small result boxes of shapes_name based on the current min diameter size. """
-        if pred_bboxes is None: return None
-        if len(pred_bboxes)==0: return None
+        if len(pred_bboxes)==0: return torch.empty((0)), torch.empty((0)), []
         min_diameter_x = self.cur_min_diam / self.img_scale[0]
         min_diameter_y = self.cur_min_diam / self.img_scale[1]
         keep = []
         for idx in range(len(pred_bboxes)):
             dx, dy = get_diams(pred_bboxes[idx])
-            if (dx >= min_diameter_x and dy >= min_diameter_y) or pred_scores[idx] == 1: keep.append(idx) 
+            if (dx >= min_diameter_x and dy >= min_diameter_y) or pred_scores[idx] == 1: keep.append(idx)
+        if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
         pred_bboxes = pred_bboxes[keep]
         pred_scores = pred_scores[keep]
         pred_ids = [pred_ids[i] for i in keep]
@@ -327,7 +329,6 @@ class OrganoiDL():
         If the shapes name doesn't exist as a key in the dicts the results are added with the new key. If the
         key exists then new_bboxes, new_scores and new_ids are compared to the class result dicts and the dicts 
         are updated, either by adding some box (user added box) or removing some box (user deleted a prediction).'''
-
         new_bboxes = convert_boxes_from_napari_view(new_bboxes)
         new_scores =  torch.Tensor(list(new_scores))
         new_ids = list(new_ids)
@@ -369,12 +370,7 @@ class OrganoiDL():
                     new_pred_ids = self.pred_ids[shapes_name][:idx]
                     new_pred_ids.extend(self.pred_ids[shapes_name][idx+1:])
                     self.pred_ids[shapes_name] = new_pred_ids
-
-    def update_next_id(self, shapes_name, c=0):
-        """ Updates the next id to append to result dicts. If input c is given then that will be the next id. """
-        if c!=0:
-            self.next_id[shapes_name] = c
-        else: self.next_id[shapes_name] += 1
+            self.next_id[shapes_name] = max(self.pred_ids[shapes_name]) + 1
 
     def remove_shape_from_dict(self, shapes_name):
         """ Removes results of shapes_name from all result dicts. """

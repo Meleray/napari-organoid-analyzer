@@ -245,8 +245,10 @@ class OrganoidAnalyzerWidget(QWidget):
         cur_layer_list = list(self.viewer.layers.selection)
         if len(cur_layer_list)==0: return
         cur_seg_selected = cur_layer_list[-1]
+        if cur_seg_selected.name == self.cur_shapes_name: return
         # switch to values of other shapes layer if clicked
         if type(cur_seg_selected)==layers.Shapes:
+            print(cur_seg_selected, self.cur_shapes_layer, self.stored_confidences, self.stored_diameters)
             if self.cur_shapes_layer is not None:
                 self.stored_confidences[self.cur_shapes_name] = self.confidence_slider.value()/100
                 self.stored_diameters[self.cur_shapes_name] = self.min_diameter_slider.value()
@@ -255,9 +257,11 @@ class OrganoidAnalyzerWidget(QWidget):
             # update min diameter text and slider with previous value of that layer
             self.min_diameter = self.stored_diameters[self.cur_shapes_name]
             self.min_diameter_textbox.setText(str(self.min_diameter))
+            self.min_diameter_slider.setValue(self.min_diameter)
             # update confidence text and slider with previous value of that layer
             self.confidence = self.stored_confidences[self.cur_shapes_name]
             self.confidence_textbox.setText(str(self.confidence))
+            self.confidence_slider.setValue(int(self.confidence*100))
 
     def _added_layer(self, event):
         # get names of added layers, image and shapes
@@ -267,10 +271,10 @@ class OrganoidAnalyzerWidget(QWidget):
         new_shape_layer_names = [name for name in new_shape_layer_names if name not in self.shape_layer_names]
         if len(new_image_layer_names)>0 : 
             self._update_added_image(new_image_layer_names)
-            self.image_layer_names.extend(new_image_layer_names)
+            self.image_layer_names = self._get_layer_names()
         if len(new_shape_layer_names)>0:
             self._update_added_shapes(new_shape_layer_names)
-            self.shape_layer_names.extend(new_shape_layer_names)
+            self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
 
         for layer in self.viewer.layers:
             layer.events.name.connect(self._on_layer_name_change)
@@ -285,10 +289,10 @@ class OrganoidAnalyzerWidget(QWidget):
         removed_shape_layer_names = [name for name in self.shape_layer_names if name not in new_shape_layer_names]
         if len(removed_image_layer_names)>0:
             self._update_removed_image(removed_image_layer_names)
-            self.image_layer_names = new_image_layer_names
+            self.image_layer_names = self._get_layer_names()
         if len(removed_shape_layer_names)>0:
             self._update_remove_shapes(removed_shape_layer_names)
-            self.shape_layer_names = new_shape_layer_names
+            self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
 
     def _preprocess(self):
         """ Preprocess the current image in the viewer to improve visualisation for the user """
@@ -307,7 +311,7 @@ class OrganoidAnalyzerWidget(QWidget):
         """ Adds the shapes layer to the viewer or updates it if already there """
         self._update_num_organoids(len(bboxes))
         # if layer already exists
-        if labels_layer_name in self.shape_layer_names: 
+        if labels_layer_name in self.shape_layer_names:
             self.viewer.layers[labels_layer_name].data = bboxes # hack to get edge_width stay the same!
             # IMPORTANT!!! Assignment of properties is possible only in its entirety. Example code below would not work
             # self.viewer.layers[labels_layer_name].properties['box_id'] = box_ids
@@ -403,6 +407,8 @@ class OrganoidAnalyzerWidget(QWidget):
         # update the viewer with the new bboxes
         labels_layer_name = 'Labels-' + self.model_name + '-' + self.image_layer_name + datetime.strftime(datetime.now(), "%H:%M:%S")
         self.label2im[labels_layer_name] = self.image_layer_name
+        self.stored_confidences[labels_layer_name] = self.confidence_slider.value()/100
+        self.stored_diameters[labels_layer_name] = self.min_diameter_slider.value()
         if labels_layer_name in self.shape_layer_names:
             show_info('Found existing labels layer. Please remove or rename it and try again!')
             return 
@@ -444,6 +450,10 @@ class OrganoidAnalyzerWidget(QWidget):
         
         bboxes = convert_boxes_from_napari_view(labels_layer.data)
 
+        if not self.label2im[self.label_layer_name] in self.viewer.layers:
+            show_error(f"Image layer '{self.label2im[self.label_layer_name]}' not found in the viewer. Please upload the image again")
+            return
+
         image = self.viewer.layers[self.label2im[self.label_layer_name]].data
         if image.shape[2] == 4:
             image = image[:, :, :3]
@@ -451,7 +461,7 @@ class OrganoidAnalyzerWidget(QWidget):
         
         masks, features = self.organoiDL.run_segmentation(image, self.label_layer_name, bboxes)
         
-        self.viewer.add_image(collate_instance_masks(masks) * 255, name=segmentation_layer_name, colormap='red', blending='additive')
+        self.viewer.add_image(collate_instance_masks(masks, color=True), name=segmentation_layer_name, blending='additive')
         if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['confidence']) != masks.shape[0]:
             show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
             return
@@ -469,7 +479,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.label_layer_name:
             show_error("No label layer selected. Please select a label layer and try again.")
             return
-
+        
         label_layer = self.viewer.layers[self.label_layer_name]
         if label_layer is None:
             show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
@@ -650,7 +660,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """ Is called whenever user changes one of the two parameter sliders """
         # check if OrganoiDL instance exists - create it if not and set there current boxes, scores and ids    
         if self.organoiDL.img_scale[0]==0: self.organoiDL.set_scale(self.cur_shapes_layer.scale)
-        self.organoiDL.update_next_id(self.cur_shapes_name, len(self.cur_shapes_layer.scale)+1)
         
         # make sure to add info to cur_shapes_layer.metadata to differentiate this action from when user adds/removes boxes
         with utils.set_dict_key( self.cur_shapes_layer.metadata, 'napari-organoid-counter:_rerun', True):
@@ -743,6 +752,37 @@ class OrganoidAnalyzerWidget(QWidget):
             # self.single_annotation_mode = False
             show_info("Switched to Multi Annotation mode.")
 
+    def _on_custom_labels_click(self):
+        """
+        Called when user clicks on button to add custom organoid annotation to image
+        """
+        if not self.image_layer_name: 
+            show_error('Cannot assign custom label to image. Please load an image first!')
+            return
+        if self.organoiDL.img_scale[0] == 0:
+            self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale)
+        new_layer_name = f'Labels-Custom-{self.image_layer_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        self.label2im[new_layer_name] = self.image_layer_name
+        self.stored_confidences[new_layer_name] = self.confidence_slider.value()/100
+        self.stored_diameters[new_layer_name] = self.min_diameter_slider.value()
+        self.organoiDL.next_id[new_layer_name] = 0
+
+        properties = {'box_id': [],'confidence': []}
+        text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
+                        'size': 12,
+                        'anchor': 'upper_left',
+                        'color': settings.TEXT_COLOR}
+        self.cur_shapes_layer = self.viewer.add_shapes( 
+                    name=new_layer_name,
+                    scale=self.viewer.layers[self.image_layer_name].scale,
+                    face_color='transparent',  
+                    properties = properties,
+                    text = text_params,
+                    edge_color=settings.COLOR_DEFAULT,
+                    shape_type='rectangle',
+                    edge_width=12)
+        self.cur_shapes_layer.current_edge_width = 12
+
     def _update_added_image(self, added_items):
         """
         Update the selection box with new images if images have been added and update the self.original_images and self.original_contrast dicts.
@@ -753,6 +793,7 @@ class OrganoidAnalyzerWidget(QWidget):
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
         self.image_layer_name = added_items[0]
+        self.image_layer_selection.setCurrentText(self.image_layer_name)
 
     def _update_removed_image(self, removed_layers):
         """
@@ -763,19 +804,19 @@ class OrganoidAnalyzerWidget(QWidget):
             item_id = self.image_layer_selection.findText(removed_layer)
             if item_id >= 0:
                 self.image_layer_selection.removeItem(item_id)
-            del self.original_images[removed_layer]
-            del self.original_contrast[removed_layer]
+            self.original_images.pop(removed_layer)
+            self.original_contrast.pop(removed_layer)
 
     def _update_added_shapes(self, added_items):
         """
         Update the selection box by shape layer names if it they have been added, update current working shape layer and instantiate OrganoiDL if not already there
         """
         # update the drop down box displaying shape layer names for saving
-        for layer_name in added_items:
+        for idx, layer_name in enumerate(added_items):
             self.segmentation_image_layer_selection.addItem(layer_name)
         # set the latest added shapes layer to the shapes layer that has been selected for saving and visualisation
         self.cur_shapes_name = added_items[0]
-        self.cur_shapes_layer = self.viewer.layers[self.cur_shapes_name] 
+        self.cur_shapes_layer = self.viewer.layers[self.cur_shapes_name]
         # get the bounding box and update the displayed number of organoids
         self._update_num_organoids(len(self.cur_shapes_layer.data)) 
         # listen for a data change in the current shapes layer
@@ -794,6 +835,9 @@ class OrganoidAnalyzerWidget(QWidget):
         for removed_layer in removed_layers:
             item_id = self.segmentation_image_layer_selection.findText(removed_layer)
             self.segmentation_image_layer_selection.removeItem(item_id)
+            self.label2im.pop(removed_layer, None)
+            self.stored_confidences.pop(removed_layer, None)
+            self.stored_diameters.pop(removed_layer, None)
             if removed_layer==self.cur_shapes_name: 
                 self._update_num_organoids(0)
             self.organoiDL.remove_shape_from_dict(removed_layer)
@@ -805,47 +849,41 @@ class OrganoidAnalyzerWidget(QWidget):
         # make sure this stuff isn't done if data in the layer has been changed by the sliders - only by the users
         key = 'napari-organoid-counter:_rerun'
         if key in self.cur_shapes_layer.metadata: 
-            return 
+            return
         
         # get new ids, new boxes and update the number of organoids
         new_ids = self.viewer.layers[self.cur_shapes_name].properties['box_id']
         new_bboxes = self.viewer.layers[self.cur_shapes_name].data
-
-        self._update_num_organoids(len(new_ids))
-
-        curr_next_id = self.organoiDL.next_id[self.cur_shapes_name]
         new_scores = self.viewer.layers[self.cur_shapes_name].properties['confidence']
         if len(new_ids) != len(new_scores):
             print('[ERROR] Number of IDs and scores do not match!')
             show_error('Number of IDs and scores do not match!')
             return
-        
+    
+        self._update_num_organoids(len(new_ids))
+        curr_next_id = self.organoiDL.next_id[self.cur_shapes_name]
         
         # check if duplicate ids
-        if len(new_ids) > len(set(new_ids)):
+        if len(new_ids) > len(set(new_ids)) or np.isnan(new_ids).any():
             used_id = set()
             for idx, id_val in enumerate(new_ids):
-                if id_val in used_id:
+                if id_val in used_id or np.isnan(id_val):
                     new_ids[idx] = curr_next_id
                     used_id.add(curr_next_id)
                     curr_next_id += 1
                     new_scores[idx] = 1.0
                 else:
                     used_id.add(id_val)
-
-            # set new properties to shapes layer
-            self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores }
-            # refresh text displayed
-            self.viewer.layers[self.cur_shapes_name].refresh()
-            self.viewer.layers[self.cur_shapes_name].refresh_text()
-            # and update the OrganoiDL instance
-            self.organoiDL.update_next_id(self.cur_shapes_name)
-
-# this doesn't work!!!!
-        # the problem is that the event is called once before the drawing has been completed!!!!!!
-        #new_bboxes = self.cur_shapes_layer.data
-        #self.organoiDL.update_bboxes_scores(new_bboxes, new_scores, new_ids)
         
+        print(new_ids, new_bboxes, new_scores)
+        self.organoiDL.update_bboxes_scores(self.cur_shapes_name, new_bboxes, new_scores, new_ids)
+
+        # set new properties to shapes layer
+        self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores }
+        # refresh text displayed
+        self.viewer.layers[self.cur_shapes_name].refresh()
+        self.viewer.layers[self.cur_shapes_name].refresh_text()
+
     def _setup_input_widget(self):
         """
         Sets up the GUI part which corresposnds to the input configurations
@@ -1008,7 +1046,12 @@ class OrganoidAnalyzerWidget(QWidget):
         run_btn = QPushButton("Run Organoid Counter")
         run_btn.clicked.connect(self._on_run_click)
         run_btn.setStyleSheet("border: 0px")
+        custom_btn = QPushButton("Add custom labels")
+        custom_btn.clicked.connect(self._on_custom_labels_click)
+        custom_btn.setStyleSheet("border: 0px")
         hbox.addWidget(run_btn)
+        hbox.addStretch(1)
+        hbox.addWidget(custom_btn)
         hbox.addStretch(1)
         return hbox
     
