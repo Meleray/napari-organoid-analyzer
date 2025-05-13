@@ -4,6 +4,7 @@ from torch import nn, Tensor
 from napari_organoid_analyzer._SAMOS.transformer_layers import TransformerDecoder, MLP, PositionEmbeddingSine
 from napari_organoid_analyzer._SAMOS.matcher import HungarianMatcher
 from napari_organoid_analyzer._SAMOS.losses import SetCriterion
+from typing import Union
 
 
 
@@ -177,7 +178,7 @@ class DetectionTransformer(nn.Module):
 
         return predictions
 
-    def forward_images(self, image_embeddings: torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
+    def forward_images(self, image_embeddings: Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
         # print('mem 1:', torch.cuda.memory_allocated())
 
         if self.backbone_name=='SAM_large':
