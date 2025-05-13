@@ -24,11 +24,17 @@ def init():
     SAM_MODEL = {"filename": "sam_vit_l_0b3195.pth",
                            "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth"}
     
+    global CACHE_DIR
+    CACHE_DIR = Path.home() / ".cache/napari-organoid-analyzer"
+    
     global MODELS_DIR
-    MODELS_DIR = Path.home() / ".cache/napari-organoid-analyzer/models"
+    MODELS_DIR = CACHE_DIR / "models"
 
-    global UTIL_DIR
-    UTIL_DIR = MODELS_DIR / "utils"
+    global DETECTIONS_DIR
+    DETECTIONS_DIR = CACHE_DIR / "detections-cache"
+
+    DETECTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     global MODEL_TYPE
     MODEL_TYPE = '.pth'
@@ -63,6 +69,4 @@ def init():
 
     global TEXT_COLOR
     TEXT_COLOR = [1.0, 0, 0, 1.0]  # Red for text labels
-
-
 

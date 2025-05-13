@@ -3,13 +3,15 @@ from typing import List
 from skimage.io import imsave
 from skimage.color import rgb2gray
 from datetime import datetime
-
-import napari
+import hashlib
+import json
+import os.path
+import pandas as pd
 
 from napari import layers
 from napari.utils.notifications import show_info, show_error, show_warning
 from urllib.request import urlretrieve
-from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, collate_instance_masks
+from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, collate_instance_masks, compute_image_hash, convert_boxes_to_napari_view
 
 
 import numpy as np
@@ -20,6 +22,7 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDia
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
 from napari_organoid_analyzer import settings
+from napari_organoid_analyzer._widgets.dialogues import ConfirmUpload, ConfirmSamUpload, ExportDialog
 import torch
 import pandas as pd
 import os
@@ -84,8 +87,6 @@ class OrganoidAnalyzerWidget(QWidget):
         # create cache dir for models if it doesn't exist and add any previously added local
         # models to the model dict
         settings.init()
-        settings.MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        settings.UTIL_DIR.mkdir(parents=True, exist_ok=True)
         utils.add_local_models()
         self.model_id = 2 # yolov3
         self.model_name = list(settings.MODELS.keys())[self.model_id]
@@ -113,6 +114,12 @@ class OrganoidAnalyzerWidget(QWidget):
         # Initialize multi_annotation_mode to False by default
         self.multi_annotation_mode = False
         # self.single_annotation_mode = True  # Initially, it's single annotation mode
+
+        # Add cache-related attributes
+        self.cache_enabled = True  # Default to enabled
+        self.image_hashes = {}  # Store image hashes for quick lookup
+        self.cache_index_file = os.path.join(str(settings.DETECTIONS_DIR), "cache_index.json")
+        self.cache_index = self._load_cache_index()
 
         # Setup tab widget
         self.tab_widget = QTabWidget()
@@ -164,72 +171,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.diameter_slider_changed = False 
         self.confidence_slider_changed = False
 
-        # Key binding to change the edge_color of the bounding boxes to green
-        @self.viewer.bind_key('g')
-        def change_edge_color_to_green(viewer: napari.Viewer):
-            if not self.multi_annotation_mode:  # Check if single-annotation mode is active
-                show_error("Cannot change edge color. Change to multi-annotation mode to enable this feature.")
-                return
-            if self.cur_shapes_layer is not None:  # Ensure shapes layer exists
-                selected_shapes = self.cur_shapes_layer.selected_data # Retrieves indices of shapes currently selected, returns a set 
-                if len(selected_shapes) > 0:
-                    # Modify the edge color only for the selected shapes
-                    current_edge_colors = self.cur_shapes_layer.edge_color 
-                    for idx in selected_shapes:
-                        # Save original color
-                        # if idx not in self.original_colors: 
-                            # self.original_colors[idx] = current_edge_colors[idx].copy()
-                        # Update to the new color
-                        current_edge_colors[idx] = settings.COLOR_CLASS_1
-                    self.cur_shapes_layer.edge_color = current_edge_colors  # Apply the changes
-                    show_info(f"Changed edge color of shapes {list(selected_shapes)} to green.")
-                else:
-                    show_warning("No shapes selected to change edge color.")
-
-        # Key binding to change the edge_color of the bounding boxes to blue
-        @self.viewer.bind_key('h')
-        def change_edge_color_to_blue(viewer: napari.Viewer):
-            if not self.multi_annotation_mode:  # Check if single-annotation mode is active
-                show_error("Cannot change edge color. Change to multi-annotation mode to enable this feature.")
-                return         
-            if self.cur_shapes_layer is not None:  # Ensure shapes layer exists
-                selected_shapes = self.cur_shapes_layer.selected_data
-                if len(selected_shapes) > 0:
-                    # Modify the edge color only for the selected shapes
-                    current_edge_colors = self.cur_shapes_layer.edge_color
-                    for idx in selected_shapes:
-                        # Save original color
-                        # if idx not in self.original_colors: 
-                            # self.original_colors[idx] = current_edge_colors[idx].copy()
-                        # Update to the new color
-                        current_edge_colors[idx] = settings.COLOR_CLASS_2
-                    self.cur_shapes_layer.edge_color = current_edge_colors  # Apply the changes
-                    show_info(f"Changed edge color of {list(selected_shapes)} to blue.")
-                else:
-                    show_warning("No shapes selected to change edge color.")
-
-        # Key binding to reset_on_layer_on_layer the edge_color of selected bounding boxes to the original magenta color
-        @self.viewer.bind_key('m')
-        def change_to_original_color(viewer: napari.Viewer):
-            if not self.multi_annotation_mode:  # Check if single-annotation mode is active
-                show_info("Cannot change edge color. Change to multi-annotation mode to enable this feature.")
-                return
-            if self.cur_shapes_layer is not None:  # Ensure shapes layer exists
-                selected_shapes = self.cur_shapes_layer.selected_data
-                if len(selected_shapes) > 0:
-                    current_edge_colors = self.cur_shapes_layer.edge_color
-                    # Modify the edge color only for the selected shapes
-                    current_edge_colors = self.cur_shapes_layer.edge_color
-                    for idx in selected_shapes:
-                        # if idx in self.original_colors:
-                            # Revert to the original color
-                            current_edge_colors[idx] = settings.COLOR_DEFAULT
-                    self.cur_shapes_layer.edge_color = current_edge_colors  # Apply the changes
-                    show_info(f"Reset edge color of {list(selected_shapes)} to magenta.")
-                else:
-                    show_warning("No shapes selected to reset edge color.")
-
-
     def handle_progress(self, blocknum, blocksize, totalsize):
         """ When the model is being downloaded, this method is called and th progress of the download
         is calculated and displayed on the progress bar. This function was re-implemented from:
@@ -240,6 +181,139 @@ class OrganoidAnalyzerWidget(QWidget):
             self.progress_bar.setValue(int(download_percentage))
             QApplication.processEvents()
 
+    def _load_cache_index(self):
+        """Load the cache index from disk or create a new one if it doesn't exist"""
+        if os.path.exists(self.cache_index_file):
+            try:
+                with open(self.cache_index_file, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                show_warning("No detections cache found")
+        return {}
+    
+    def _save_cache_index(self):
+        """Save the cache index to disk"""
+        try:
+            with open(self.cache_index_file, 'w') as f:
+                json.dump(self.cache_index, f)
+        except IOError:
+            show_error("Failed to save cache index")
+    
+    def _check_for_cached_results(self, image_hash):
+        """Check if the given image hash has cached detection results"""
+        if image_hash in self.cache_index:
+            cache_file = self.cache_index[image_hash]
+            if os.path.exists(cache_file):
+                return cache_file
+            else:
+                show_error(f"Cache file {cache_file} not found although present in cache index")
+        return None
+    
+    def _save_cache_results(self, layer_name):
+        if not self.cache_enabled:
+            return
+
+        if layer_name not in self.label2im:
+            show_error(f"Layer {layer_name} doesn't have associated image layer")
+            return
+        
+        if self.label2im[layer_name] not in self.viewer.layers:
+            show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
+            return
+
+        image_hash = self.image_hashes[self.label2im[layer_name]]
+
+        cache_file = os.path.join(
+            str(settings.DETECTIONS_DIR), 
+            f"cache_{image_hash}.json"
+        )
+        
+        with open(cache_file, 'w') as f:
+            bboxes = self.organoiDL.pred_bboxes[layer_name]
+            box_ids = self.organoiDL.pred_ids[layer_name]
+            scores = self.organoiDL.pred_scores[layer_name]
+            scale = self.viewer.layers[self.label2im[layer_name]].scale
+
+            # Create a dictionary to store the data
+            cache_data = {
+                'bboxes': bboxes.tolist(),
+                'bbox_ids': box_ids,
+                'scores': scores.tolist(),
+                'scale': scale.tolist(),
+            }
+                
+            # Write the data to the cache file
+            json.dump(cache_data, f)
+        
+        self.cache_index[image_hash] = cache_file
+        self._save_cache_index()
+
+    
+    def _load_cached_results(self, cache_file):
+        """Load detection results from cache file"""
+        try:
+            with open(cache_file, 'r') as f:
+                cache_data = json.load(f)
+                return cache_data
+        except (json.JSONDecodeError, IOError):
+            show_error(f"Failed to load cached results from {cache_file}")
+            return None
+        
+    
+    def _create_shapes_from_cache(self, image_layer_name, cache_data):
+        """Create a shapes layer from cached detection data"""
+        if self.organoiDL.img_scale[0] == 0:
+            self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale)
+            
+        bboxes = convert_boxes_to_napari_view(np.array(cache_data.get('bboxes', [])))
+        box_ids = list(map(int, cache_data.get('bbox_ids', [])))
+        scores = cache_data.get('scores', [])
+        labels = cache_data.get('labels', [0] * len(bboxes))
+        scale = cache_data.get('scale', self.viewer.layers[image_layer_name].scale)
+
+        if scale[0] != self.viewer.layers[image_layer_name].scale[0] or scale[1] != self.viewer.layers[image_layer_name].scale[1]:
+            show_warning("Scale mismatch between cached data and current image layer")
+
+        if len(bboxes) == 0:
+            show_error("No detections found in cache")
+            return False
+            
+        # Create a new shapes layer
+        labels_layer_name = f'Labels-Cache-{image_layer_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        self.organoiDL.update_bboxes_scores(labels_layer_name, bboxes, scores, box_ids)
+        bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
+        
+
+        # Set up the shapes layer
+        properties = {'box_id': box_ids, 'confidence': scores}
+        text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
+                       'size': 12,
+                       'anchor': 'upper_left',
+                       'color': settings.TEXT_COLOR}
+        
+        self.cur_shapes_layer = self.viewer.add_shapes(
+            bboxes, 
+            name=labels_layer_name,
+            scale=scale,
+            face_color='transparent',
+            properties=properties,
+            text=text_params,
+            edge_color=settings.COLOR_DEFAULT,
+            shape_type='rectangle',
+            edge_width=12
+        )
+        
+        self.cur_shapes_name = labels_layer_name
+        self.label2im[labels_layer_name] = image_layer_name
+        self.stored_confidences[labels_layer_name] = self.confidence_slider.value()/100
+        self.stored_diameters[labels_layer_name] = self.min_diameter_slider.value()
+        
+        self._update_num_organoids(len(bboxes))
+        
+        self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
+        
+        return True
+
     def _sel_layer_changed(self, event):
         """ Is called whenever the user selects a different layer to work on. """
         cur_layer_list = list(self.viewer.layers.selection)
@@ -248,7 +322,6 @@ class OrganoidAnalyzerWidget(QWidget):
         if cur_seg_selected.name == self.cur_shapes_name: return
         # switch to values of other shapes layer if clicked
         if type(cur_seg_selected)==layers.Shapes:
-            print(cur_seg_selected, self.cur_shapes_layer, self.stored_confidences, self.stored_diameters)
             if self.cur_shapes_layer is not None:
                 self.stored_confidences[self.cur_shapes_name] = self.confidence_slider.value()/100
                 self.stored_diameters[self.cur_shapes_name] = self.min_diameter_slider.value()
@@ -280,6 +353,31 @@ class OrganoidAnalyzerWidget(QWidget):
             layer.events.name.connect(self._on_layer_name_change)
             if type(layer) == layers.Shapes:
                 layer.events.highlight.connect(self._on_shape_selected)
+
+        # After adding the new image layers, check for cached results
+        for name in new_image_layer_names:
+            # Compute image hash and store it
+            image_data = self.viewer.layers[name].data
+            image_hash = compute_image_hash(image_data)
+            self.image_hashes[name] = image_hash
+            
+            # Check if this image has cached results
+            cache_file = self._check_for_cached_results(image_hash)
+            if cache_file:
+                # Create a dialog to ask user if they want to use cached results
+                from qtpy.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    'Cached Results Available',
+                    f'Found cached detection results for image {name}. Load them?',
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                
+                if reply == QMessageBox.Yes:
+                    cache_data = self._load_cached_results(cache_file)
+                    if cache_data:
+                        self._create_shapes_from_cache(name, cache_data)
 
     def _removed_layer(self, event):
         """ Is called whenever a layer has been deleted (by the user) and removes the layer from GUI and backend. """
@@ -353,14 +451,9 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.image_layer_name: show_info('Please load an image first and try again!')
         else: self._preprocess()
 
-    def _on_run_click(self):
-        """ Is called whenever Run Organoid Counter button is clicked """
-        # check if an image has been loaded
-        if not self.image_layer_name: 
-            show_info('Please load an image first and try again!')
-            return
+    def _check_sam(self):
         # check if SAM model exists locally and if not ask user if it's ok to download
-        if not utils.return_is_file(settings.UTIL_DIR, settings.SAM_MODEL["filename"]): 
+        if not utils.return_is_file(settings.MODELS_DIR, settings.SAM_MODEL["filename"]): 
             confirm_window = ConfirmSamUpload(self)
             confirm_window.exec_()
             # if user clicks cancel return doing nothing 
@@ -368,9 +461,18 @@ class OrganoidAnalyzerWidget(QWidget):
             # otherwise download model and display progress in progress bar
             else: 
                 self.progress_box.show()
-                save_loc = os.path.join(str(settings.UTIL_DIR),  settings.SAM_MODEL["filename"])
+                save_loc = os.path.join(str(settings.MODELS_DIR),  settings.SAM_MODEL["filename"])
                 urlretrieve(settings.SAM_MODEL["url"], save_loc, self.handle_progress)
                 self.progress_box.hide()
+
+    def _on_run_click(self):
+        """ Is called whenever Run Organoid Counter button is clicked """
+        # check if an image has been loaded
+        if not self.image_layer_name: 
+            show_info('Please load an image first and try again!')
+            return
+        
+        self._check_sam()
 
         # check if model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[self.model_name]["filename"]): 
@@ -427,8 +529,10 @@ class OrganoidAnalyzerWidget(QWidget):
         bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
         # hide activity dock on completion
         self.viewer.window._status_bar._toggle_activity_dock(False)
+        
         # update widget with results
         self._update_detections(bboxes, scores, box_ids, labels_layer_name)
+        self._save_cache_results(labels_layer_name)
         # and update cur_shapes_name to newly created shapes layer
         self.cur_shapes_name = labels_layer_name
         # preprocess the image if not done so already to improve visualization
@@ -453,6 +557,10 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.label2im[self.label_layer_name] in self.viewer.layers:
             show_error(f"Image layer '{self.label2im[self.label_layer_name]}' not found in the viewer. Please upload the image again")
             return
+        
+        self._check_sam()
+        if self.organoiDL.sam_predictor is None:
+            self.organoiDL.init_sam_predictor()
 
         image = self.viewer.layers[self.label2im[self.label_layer_name]].data
         if image.shape[2] == 4:
@@ -616,9 +724,13 @@ class OrganoidAnalyzerWidget(QWidget):
         """Export selected features to CSV"""
         # Extract only the selected features
         features_to_export = {}
-        for feature, selected in selected_features.items():
-            if selected and feature in label_layer.properties:
+        for feature in selected_features:
+            if feature in label_layer.properties:
                 features_to_export[feature] = label_layer.properties[feature]
+            elif feature == "Bounding box":
+                features_to_export[feature] = convert_boxes_from_napari_view(label_layer.data).tolist()
+            else:
+                show_error(f"Feature '{feature}' not found in the layer properties.")
         
         # Convert to pandas DataFrame
         if features_to_export:
@@ -789,7 +901,8 @@ class OrganoidAnalyzerWidget(QWidget):
         Set the latest added image to the current working image (self.image_layer_name)
         """
         for layer_name in added_items:
-            self.image_layer_selection.addItem(layer_name)
+            if not layer_name.startswith('Segmentation-'):
+                self.image_layer_selection.addItem(layer_name)
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
         self.image_layer_name = added_items[0]
@@ -856,7 +969,6 @@ class OrganoidAnalyzerWidget(QWidget):
         new_bboxes = self.viewer.layers[self.cur_shapes_name].data
         new_scores = self.viewer.layers[self.cur_shapes_name].properties['confidence']
         if len(new_ids) != len(new_scores):
-            print('[ERROR] Number of IDs and scores do not match!')
             show_error('Number of IDs and scores do not match!')
             return
     
@@ -875,8 +987,8 @@ class OrganoidAnalyzerWidget(QWidget):
                 else:
                     used_id.add(id_val)
         
-        print(new_ids, new_bboxes, new_scores)
         self.organoiDL.update_bboxes_scores(self.cur_shapes_name, new_bboxes, new_scores, new_ids)
+        self._save_cache_results(self.cur_shapes_name)
 
         # set new properties to shapes layer
         self.viewer.layers[self.cur_shapes_name].properties = { 'box_id': new_ids, 'confidence': new_scores }
@@ -1041,6 +1153,9 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         Sets up the GUI part where the user hits the run button
         """
+        vbox = QVBoxLayout()
+        
+        # Button layout
         hbox = QHBoxLayout()
         hbox.addStretch(1)
         run_btn = QPushButton("Run Organoid Counter")
@@ -1053,8 +1168,24 @@ class OrganoidAnalyzerWidget(QWidget):
         hbox.addStretch(1)
         hbox.addWidget(custom_btn)
         hbox.addStretch(1)
-        return hbox
+        vbox.addLayout(hbox)
+        
+        # Cache checkbox
+        cache_hbox = QHBoxLayout()
+        cache_hbox.addStretch(1)
+        self.cache_checkbox = QCheckBox("Cache results")
+        self.cache_checkbox.setChecked(self.cache_enabled)
+        self.cache_checkbox.stateChanged.connect(self._on_cache_checkbox_changed)
+        cache_hbox.addWidget(self.cache_checkbox)
+        cache_hbox.addStretch(1)
+        vbox.addLayout(cache_hbox)
+        
+        return vbox
     
+    def _on_cache_checkbox_changed(self, state):
+        """Called when cache checkbox is toggled"""
+        self.cache_enabled = (state == Qt.Checked)
+
     def _setup_annotation_mode_box(self):
         """
         Sets up the GUI part where the annotation mode is selected.
@@ -1283,158 +1414,3 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info(f"Detection data exported successfully to {file_path}.")
         else:
             show_warning("Export canceled.")
-
-class ExportDialog(QDialog):
-    """
-    Dialog for selecting export options
-    """
-    def __init__(self, parent, available_features):
-        super().__init__(parent)
-        self.setWindowTitle("Export Options")
-        self.setMinimumWidth(500)
-        
-        # Main layout
-        layout = QVBoxLayout()
-        
-        # Export path selection
-        path_layout = QHBoxLayout()
-        path_layout.addWidget(QLabel("Export to folder:"))
-        self.path_input = QLineEdit()
-        path_layout.addWidget(self.path_input, 1)
-        browse_button = QPushButton("Browse...")
-        browse_button.clicked.connect(self._browse_folder)
-        path_layout.addWidget(browse_button)
-        layout.addLayout(path_layout)
-        
-        # What to export
-        layout.addWidget(QLabel("Select what to export:"))
-        
-        # Export options layout (left side of the bottom part)
-        options_layout = QVBoxLayout()
-        
-        # Checkboxes for export options
-        self.export_bboxes = QCheckBox("Bounding boxes (JSON)")
-        self.export_bboxes.setChecked(True)
-        self.export_instance_masks = QCheckBox("Instance masks (NPY)")
-        self.export_instance_masks.setChecked(True)
-        self.export_collated_mask = QCheckBox("Collated mask (NPY)")
-        self.export_collated_mask.setChecked(True)
-        self.export_features = QCheckBox("Features (CSV)")
-        self.export_features.setChecked(True)
-        self.export_features.stateChanged.connect(self._toggle_feature_selection)
-        
-        options_layout.addWidget(self.export_bboxes)
-        options_layout.addWidget(self.export_instance_masks)
-        options_layout.addWidget(self.export_collated_mask)
-        options_layout.addWidget(self.export_features)
-        
-        # Bottom part with options on left and feature selection on right
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addLayout(options_layout)
-        
-        # Feature selection (right side)
-        self.feature_selection_widget = QWidget()
-        feature_layout = QVBoxLayout()
-        feature_layout.addWidget(QLabel("Select features to export:"))
-        
-        self.feature_checkboxes = {}
-        for feature in available_features:
-            checkbox = QCheckBox(feature)
-            checkbox.setChecked(True)  # Default checked
-            self.feature_checkboxes[feature] = checkbox
-            feature_layout.addWidget(checkbox)
-        
-        feature_layout.addStretch()
-        self.feature_selection_widget.setLayout(feature_layout)
-        bottom_layout.addWidget(self.feature_selection_widget)
-        layout.addLayout(bottom_layout)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        export_button = QPushButton("Export")
-        export_button.clicked.connect(self.accept)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(export_button)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-    
-    def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
-        if folder:
-            self.path_input.setText(folder)
-    
-    def _toggle_feature_selection(self, state):
-        self.feature_selection_widget.setVisible(state == Qt.Checked)
-    
-    def get_export_path(self):
-        return self.path_input.text()
-    
-    def get_export_options(self):
-        return {
-            'bboxes': self.export_bboxes.isChecked(),
-            'instance_masks': self.export_instance_masks.isChecked(),
-            'collated_mask': self.export_collated_mask.isChecked(),
-            'features': self.export_features.isChecked()
-        }
-    
-    def get_selected_features(self):
-        return {feature: checkbox.isChecked() 
-                for feature, checkbox in self.feature_checkboxes.items()}
-
-class ConfirmUpload(QDialog):
-    '''
-    The QDialog box that appears when the user selects to run organoid counter
-    without having the selected model locally
-    Parameters
-    ----------
-        parent: QWidget
-            The parent widget, in this case an instance of OrganoidCounterWidget
-
-    '''
-    def __init__(self, parent: QWidget, model_name: str):
-        super().__init__(parent)
-
-        self.setWindowTitle("Confirm Download")
-        # setup buttons and text to be displayed
-        ok_btn = QPushButton("OK")
-        cancel_btn = QPushButton("Cancel")
-        text = (f"Model {model_name} not found locally. Downloading default model to \n"
-                +str(settings.MODELS_DIR)+"\n"
-                "This will only happen once. Click ok to continue or \n"
-                "cancel if you do not agree. You won't be able to run\n"
-                "the organoid counter if you click cancel.")
-        # add all to layout
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel(text))
-        hbox = QHBoxLayout()
-        hbox.addWidget(ok_btn)
-        hbox.addWidget(cancel_btn)
-        layout.addLayout(hbox)
-        self.setLayout(layout)
-        # connect ok and cancel buttons with accept and reject signals
-        ok_btn.clicked.connect(self.accept)
-        cancel_btn.clicked.connect(self.reject)
-
-class ConfirmSamUpload(ConfirmUpload):
-    '''
-    The QDialog box that appears when the user selects to run organoid counter
-    without having the SAM detection and segmentation model locally
-    Parameters
-    ----------
-        parent: QWidget
-            The parent widget, in this case an instance of OrganoidCounterWidget
-
-    '''
-    def __init__(self, parent: QWidget):
-        super().__init__(parent, model_name="")
-        text = ("SAM model not found locally. Downloading default model to \n"
-                +str(settings.UTIL_DIR)+"\n"
-                "This will only happen once. Click ok to continue or \n"
-                "cancel if you do not agree. You won't be able to run\n"
-                "the organoid segmentation and detection with SAMOS\n" 
-                "if you click cancel. WARNING: The model size is 1.2 GB!")
-        self.layout().itemAt(0).widget().setText(text)
-

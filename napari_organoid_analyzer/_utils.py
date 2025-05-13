@@ -9,6 +9,7 @@ import json
 import csv
 from skimage.transform import rescale
 from skimage.color import gray2rgb
+import hashlib
 
 import torch
 from torchvision.ops import nms
@@ -42,7 +43,7 @@ def add_local_models():
     model_names_in_dir = [file for file in os.listdir(settings.MODELS_DIR)]
     model_names_in_dict = [settings.MODELS[key]["filename"] for key in settings.MODELS.keys()]
     for model_name in model_names_in_dir:
-        if model_name not in model_names_in_dict and model_name.endswith(settings.MODEL_TYPE):
+        if model_name not in model_names_in_dict and model_name.endswith(settings.MODEL_TYPE) and model_name != settings.SAM_MODEL["filename"]:
             _ = add_to_dict(model_name)
 
 def add_to_dict(filepath):
@@ -101,6 +102,13 @@ def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales, labels):
                         })
     return data_json
 
+def compute_image_hash(image):
+    """Compute a hash of the image for caching purposes"""
+        # Convert image to bytes and calculate MD5 hash
+    image_bytes = np.array(image).tobytes()
+    image_hash = hashlib.md5(image_bytes).hexdigest()
+    return image_hash
+
 def write_to_csv(name, data):
     """ Write data to a csv file. Here data is a list of lists, where each item represents a row in the csv file. """
     with open(name, 'w') as f:
@@ -157,9 +165,9 @@ def convert_boxes_to_napari_view(pred_bboxes):
     """ The bboxes are converted from tensors in model output form to a form which can be visualised in the napari viewer """
     if pred_bboxes is None: return []
     new_boxes = []
-    for idx in range(pred_bboxes.size(0)):
+    for idx in range(pred_bboxes.shape[0]):
         # convert to numpy and take coordinates 
-        x1_real, y1_real, x2_real, y2_real = pred_bboxes[idx].numpy()
+        x1_real, y1_real, x2_real, y2_real = pred_bboxes[idx].tolist()
         # append to a list in form napari exects
         new_boxes.append(np.array([[x1_real, y1_real],
                                 [x1_real, y2_real],

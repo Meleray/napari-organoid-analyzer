@@ -58,15 +58,20 @@ class OrganoiDL():
         self.pred_masks = {}
         self.pred_ids = {}
         self.next_id = {}
-        sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.UTIL_DIR), settings.SAM_MODEL["filename"]))
-        self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
+        self.sam_predictor = None
 
     def set_scale(self, img_scale):
         ''' Set the image scale: used to calculate real box sizes. '''
         self.img_scale = img_scale
+    
+    def init_sam_predictor(self):
+        if self.sam_predictor is None:
+            sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
+            self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
 
     def set_model(self, model_name):
         ''' Initialise  model instance and load model checkpoint and send to device. '''
+        self.init_sam_predictor()
         self.model_name = model_name
         model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
         if model_name == 'SAMOS':
@@ -221,7 +226,7 @@ class OrganoiDL():
         self.pred_bboxes[shapes_name] = bboxes
         self.pred_scores[shapes_name] = pred_scores
         num_predictions = bboxes.size(0)
-        self.pred_ids[shapes_name] = [(i+1) for i in range(num_predictions)]
+        self.pred_ids[shapes_name] = [int(i+1) for i in range(num_predictions)]
         self.next_id[shapes_name] = num_predictions+1
 
     def run_segmentation(self, img, mask_name, bboxes):
@@ -273,16 +278,17 @@ class OrganoiDL():
         """
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) != 1:
-            logging.error(f"Expected 1 contour, found {len(contours)} for mask {idx}")
-        area = cv2.contourArea(contours[0])
-        perimeter = cv2.arcLength(contours[0], True)
+        area = [cv2.contourArea(contour) for contour in contours]
+        id_selected = np.argmax(area)
+        if len(contours) > 1:
+            logging.warning(f"Multiple contours found for organoid {idx}. Using the contour with largest area: {area[id_selected]}")
+        perimeter = cv2.arcLength(contours[id_selected], True)
         if perimeter > 0:
-            roundness = (4 * np.pi * area) / (perimeter ** 2)
+            roundness = (4 * np.pi * area[id_selected]) / (perimeter ** 2)
         else:
             roundness = 0
         return {
-            'Area': area,
+            'Area': area[id_selected],
             'Perimeter': perimeter,
             'Roundness': roundness
         }
