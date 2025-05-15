@@ -237,7 +237,7 @@ class OrganoidAnalyzerWidget(QWidget):
             # Create a dictionary to store the data
             cache_data = {
                 'bboxes': bboxes.tolist(),
-                'bbox_ids': box_ids,
+                'bbox_ids': list(map(int, box_ids)),
                 'scores': scores.tolist(),
                 'scale': scale.tolist(),
             }
@@ -903,10 +903,10 @@ class OrganoidAnalyzerWidget(QWidget):
         for layer_name in added_items:
             if not layer_name.startswith('Segmentation-'):
                 self.image_layer_selection.addItem(layer_name)
+                self.image_layer_name = layer_name
+                self.image_layer_selection.setCurrentText(self.image_layer_name)
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
-        self.image_layer_name = added_items[0]
-        self.image_layer_selection.setCurrentText(self.image_layer_name)
 
     def _update_removed_image(self, removed_layers):
         """
@@ -980,13 +980,15 @@ class OrganoidAnalyzerWidget(QWidget):
             used_id = set()
             for idx, id_val in enumerate(new_ids):
                 if id_val in used_id or np.isnan(id_val):
-                    new_ids[idx] = curr_next_id
+                    new_ids[idx] = int(curr_next_id)
                     used_id.add(curr_next_id)
                     curr_next_id += 1
                     new_scores[idx] = 1.0
                 else:
                     used_id.add(id_val)
-        
+
+
+        new_ids = list(map(int, new_ids))
         self.organoiDL.update_bboxes_scores(self.cur_shapes_name, new_bboxes, new_scores, new_ids)
         self._save_cache_results(self.cur_shapes_name)
 
