@@ -36,6 +36,12 @@ def collate_instance_masks(masks, color=False):
             result[:, :, c] = np.where(masks[i], colors[i, c], result[:, :, c])
     return result
 
+def get_viewer_layer_name(name):
+    """ Get viewer layer name from the saved frame or image name"""
+    if name.startswith('TL:'):
+        name = ':'.join(name.split(':')[2:])
+    return name
+
 def add_local_models():
     """ Checks the models directory for any local models previously added by the user.
     If some are found then these are added to the model dictionary (see settings). """
@@ -195,9 +201,20 @@ def apply_normalization(img):
     img = squeeze_img(img)
     img = img.astype(np.float64)
     # adapt img to range 0-255
-    img_min = np.min(img) # 31.3125 png 0
-    img_max = np.max(img) # 2899.25 png 178
-    img_norm = (255 * (img - img_min) / (img_max - img_min)).astype(np.uint8)
+    if img.ndim == 3:
+        img_min = np.min(img) # 31.3125 png 0
+        img_max = np.max(img) # 2899.25 png 178
+        img_norm = (255 * (img - img_min) / (img_max - img_min)).astype(np.uint8)
+    elif img.ndim == 4:
+        img_norm = np.zeros_like(img, dtype=np.uint8)
+        for idx in range(len(img)):
+            frame = img[idx]
+            frame_min = np.min(frame)
+            frame_max = np.max(frame)
+            frame_norm = (255 * (frame - frame_min) / (frame_max - frame_min)).astype(np.uint8)
+            img_norm[idx] = frame_norm
+    else:
+        raise ValueError(f"Wrong image format for preprocessing. Image shape: {img.shape}")
     return img_norm
 
 def get_package_init_file(package_name):
