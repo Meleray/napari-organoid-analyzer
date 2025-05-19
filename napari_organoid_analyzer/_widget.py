@@ -369,7 +369,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 for i in range(image_data.shape[0]):
                     self.compute_and_check_image_hash(image_data[i], f"TL:Frame{i}:{name}")
                 self.remember_choice_for_image_import = None
-            elif image_data.ndim == 3:
+            elif image_data.ndim == 3 or image_data.ndim == 2:
                 self.compute_and_check_image_hash(image_data, name)
                 self.remember_choice_for_image_import = None
             else:
@@ -428,12 +428,12 @@ class OrganoidAnalyzerWidget(QWidget):
             self._update_remove_shapes(removed_shape_layer_names)
             self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
 
-    def _preprocess(self):
+    def _preprocess(self, layer_name):
         """ Preprocess the current image in the viewer to improve visualisation for the user """
-        img = self.original_images[self.image_layer_name]
+        img = self.original_images[layer_name]
         img = utils.apply_normalization(img)
-        self.viewer.layers[self.image_layer_name].data = img
-        self.viewer.layers[self.image_layer_name].contrast_limits = (0,255)
+        self.viewer.layers[layer_name].data = img
+        self.viewer.layers[layer_name].contrast_limits = (0,255)
 
     def _update_num_organoids(self, len_bboxes):
         """ Updates the number of organoids displayed in the viewer """
@@ -479,13 +479,7 @@ class OrganoidAnalyzerWidget(QWidget):
                                                                edge_width=12) # warning generated here
                             
             # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
-            self.viewer.layers[labels_layer_name].current_edge_width = 12
-            
-
-    def _on_preprocess_click(self):
-        """ Is called whenever preprocess button is clicked """
-        if not self.image_layer_name: show_info('Please load an image first and try again!')
-        else: self._preprocess()
+            self.viewer.layers[labels_layer_name].current_edge_width = 1
 
     def _check_sam(self):
         # check if SAM model exists locally and if not ask user if it's ok to download
@@ -536,7 +530,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.viewer.window._status_bar._toggle_activity_dock(True)
         img_data = self.viewer.layers[self.image_layer_name].data
 
-        if img_data.ndim == 3:
+        if img_data.ndim == 3 or img_data.ndim == 2:
             labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
             self.label2im[labels_layer_name] = self.image_layer_name
             self._detect_organoids(img_data, labels_layer_name)
@@ -589,8 +583,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self._save_cache_results(labels_layer_name)
         # and update cur_shapes_name to newly created shapes layer
         self.cur_shapes_name = labels_layer_name
-        # preprocess the image if not done so already to improve visualization
-        self._preprocess()
 
     def _on_run_segmentation(self):
         """
@@ -956,6 +948,10 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         for layer_name in added_items:
             if not layer_name.startswith('Segmentation-'):
+                try:
+                    self._preprocess(layer_name)
+                except Exception as e:
+                    show_error(f"Error preprocessing image {layer_name}: {e}")
                 self.image_layer_selection.addItem(layer_name)
                 self.image_layer_name = layer_name
                 self.image_layer_selection.setCurrentText(self.image_layer_name)
@@ -1113,13 +1109,9 @@ class OrganoidAnalyzerWidget(QWidget):
                     self.image_layer_selection.addItem(name)
         #self.image_layer_selection.setItemText(self.image_layer_name)
         self.image_layer_selection.currentIndexChanged.connect(self._on_image_selection_changed)
-        # setup preprocess button to improve visualisation
-        preprocess_btn = QPushButton("Preprocess")
-        preprocess_btn.clicked.connect(self._on_preprocess_click)
         # and add all these to the layout
         hbox.addWidget(image_label, 2)
         hbox.addWidget(self.image_layer_selection, 4)
-        hbox.addWidget(preprocess_btn, 4)
         return hbox
 
     def _setup_model_box(self):

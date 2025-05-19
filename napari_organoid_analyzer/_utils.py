@@ -213,8 +213,12 @@ def apply_normalization(img):
             frame_max = np.max(frame)
             frame_norm = (255 * (frame - frame_min) / (frame_max - frame_min)).astype(np.uint8)
             img_norm[idx] = frame_norm
+    elif img.ndim == 2:
+        img_min = np.min(img)
+        img_max = np.max(img)
+        img_norm = (255 * (img - img_min) / (img_max - img_min)).astype(np.uint8)
     else:
-        raise ValueError(f"Wrong image format for preprocessing. Image shape: {img.shape}")
+        raise ValueError(f"Wrong image format for preprocessing. Image shape: {img.shape}. Please delete the added image.")
     return img_norm
 
 def get_package_init_file(package_name):
