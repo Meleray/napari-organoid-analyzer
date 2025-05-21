@@ -3,7 +3,6 @@ from typing import List
 from skimage.io import imsave
 from skimage.color import rgb2gray
 from datetime import datetime
-import hashlib
 import json
 import os.path
 import pandas as pd
@@ -12,7 +11,14 @@ from napari.utils import progress
 from napari import layers
 from napari.utils.notifications import show_info, show_error, show_warning
 from urllib.request import urlretrieve
-from napari_organoid_analyzer._utils import convert_boxes_from_napari_view, collate_instance_masks, compute_image_hash, convert_boxes_to_napari_view, get_viewer_layer_name
+from napari_organoid_analyzer._utils import (
+    convert_boxes_from_napari_view, 
+    collate_instance_masks, 
+    compute_image_hash, 
+    convert_boxes_to_napari_view, 
+    get_viewer_layer_name,
+    validate_bboxes
+)
 
 
 import numpy as np
@@ -27,6 +33,7 @@ from napari_organoid_analyzer._widgets.dialogues import ConfirmUpload, ConfirmSa
 import torch
 import pandas as pd
 import os
+import matplotlib.pyplot as plt
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -111,7 +118,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.stored_confidences = {}
         self.stored_diameters = {}
         self.label2im = {}
-        self.timelapses = []
+        self.timelapses = {}
 
         # Initialize multi_annotation_mode to False by default
         self.multi_annotation_mode = False
@@ -123,6 +130,11 @@ class OrganoidAnalyzerWidget(QWidget):
         self.cache_index_file = os.path.join(str(settings.DETECTIONS_DIR), "cache_index.json")
         self.cache_index = self._load_cache_index()
         self.remember_choice_for_image_import = None  # Variable to store user choice for image import
+
+        # Initialize guided mode to False
+        self.guided_mode = False
+        self.guidance_layer_name = None
+        self.guidance_layers = set()
 
         # Setup tab widget
         self.tab_widget = QTabWidget()
@@ -328,7 +340,7 @@ class OrganoidAnalyzerWidget(QWidget):
         cur_seg_selected = cur_layer_list[-1]
         if cur_seg_selected.name == self.cur_shapes_name: return
         # switch to values of other shapes layer if clicked
-        if type(cur_seg_selected)==layers.Shapes:
+        if type(cur_seg_selected)==layers.Shapes and not cur_seg_selected.name in self.guidance_layers:
             if self.cur_shapes_layer is not None:
                 self.stored_confidences[self.cur_shapes_name] = self.confidence_slider.value()/100
                 self.stored_diameters[self.cur_shapes_name] = self.min_diameter_slider.value()
@@ -351,29 +363,8 @@ class OrganoidAnalyzerWidget(QWidget):
         new_shape_layer_names = [name for name in new_shape_layer_names if name not in self.shape_layer_names]
         if len(new_image_layer_names)>0 : 
             self._update_added_image(new_image_layer_names)
-            self.image_layer_names = self._get_layer_names()
         if len(new_shape_layer_names)>0:
             self._update_added_shapes(new_shape_layer_names)
-            self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
-
-        for layer in self.viewer.layers:
-            layer.events.name.connect(self._on_layer_name_change)
-            if type(layer) == layers.Shapes:
-                layer.events.highlight.connect(self._on_shape_selected)
-
-        # After adding the new image layers, check for cached results
-        for name in new_image_layer_names:
-            # Compute image hash and store it
-            image_data = self.viewer.layers[name].data
-            if image_data.ndim == 4:
-                for i in range(image_data.shape[0]):
-                    self.compute_and_check_image_hash(image_data[i], f"TL:Frame{i}:{name}")
-                self.remember_choice_for_image_import = None
-            elif image_data.ndim == 3 or image_data.ndim == 2:
-                self.compute_and_check_image_hash(image_data, name)
-                self.remember_choice_for_image_import = None
-            else:
-                show_error(f"Unsupported image format for layer {name}: shape {image_data.shape}")
 
     def compute_and_check_image_hash(self, image_data, name):
         image_hash = compute_image_hash(image_data)
@@ -428,9 +419,8 @@ class OrganoidAnalyzerWidget(QWidget):
             self._update_remove_shapes(removed_shape_layer_names)
             self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
 
-    def _preprocess(self, layer_name):
+    def _preprocess(self, layer_name, img):
         """ Preprocess the current image in the viewer to improve visualisation for the user """
-        img = self.original_images[layer_name]
         img = utils.apply_normalization(img)
         self.viewer.layers[layer_name].data = img
         self.viewer.layers[layer_name].contrast_limits = (0,255)
@@ -457,17 +447,22 @@ class OrganoidAnalyzerWidget(QWidget):
             self.viewer.layers[labels_layer_name].refresh_text()
         # or if this is the first run
         else:
+            text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
+                            'size': 12,
+                            'anchor': 'upper_left',
+                            'color': settings.TEXT_COLOR}
             # if no organoids were found just make an empty shapes layer
             if self.num_organoids==0: 
                 self.cur_shapes_layer = self.viewer.add_shapes(name=labels_layer_name,
-                                                               properties={'box_id': [],'confidence': []})
+                                                               properties={'box_id': [],'confidence': []},
+                                                               text=text_params,
+                                                               edge_color=settings.COLOR_DEFAULT,
+                                                               face_color='transparent',
+                                                               edge_width=12,
+                                                               scale=self.viewer.layers[self.image_layer_name].scale[:2],)
             # otherwise make the layer and add the boxes
             else:
                 properties = {'box_id': box_ids,'confidence': scores}
-                text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
-                               'size': 12,
-                               'anchor': 'upper_left',
-                               'color': settings.TEXT_COLOR}
                 self.cur_shapes_layer = self.viewer.add_shapes(bboxes, 
                                                                name=labels_layer_name,
                                                                scale=self.viewer.layers[self.image_layer_name].scale[:2],
@@ -480,6 +475,7 @@ class OrganoidAnalyzerWidget(QWidget):
                             
             # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
             self.viewer.layers[labels_layer_name].current_edge_width = 1
+        self.cur_shapes_name = labels_layer_name
 
     def _check_sam(self):
         # check if SAM model exists locally and if not ask user if it's ok to download
@@ -526,20 +522,31 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info('Keep number of window sizes and downsampling the same and try again!')
             return
         
+        if self.guided_mode and (not self.guidance_layer_name or self.guidance_layer_name not in self.viewer.layers):
+            show_error("Guidance layer not found in the viewer. Please select a valid guidance layer.")
+            return
+        
         # get the current image 
-        self.viewer.window._status_bar._toggle_activity_dock(True)
         img_data = self.viewer.layers[self.image_layer_name].data
 
         if img_data.ndim == 3 or img_data.ndim == 2:
+            if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[:2]):
+                show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
+                return
             labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
             self.label2im[labels_layer_name] = self.image_layer_name
+            self.viewer.window._status_bar._toggle_activity_dock(True)
             self._detect_organoids(img_data, labels_layer_name)
         elif img_data.ndim == 4:
+            if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[1:3]):
+                show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
+                return
             frame_names = []
             for i in progress(range(img_data.shape[0])):
                 labels_layer_name = f'TL:Frame{i}:{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
                 frame_names.append(labels_layer_name)
                 self.label2im[labels_layer_name] = f"TL:Frame{i}:{self.image_layer_name}"
+                self.viewer.window._status_bar._toggle_activity_dock(True)
                 self._detect_organoids(img_data[i], labels_layer_name)
             self.timelapses.append(frame_names)
         else:
@@ -564,16 +571,20 @@ class OrganoidAnalyzerWidget(QWidget):
         # update the viewer with the new bboxes
         self.stored_confidences[labels_layer_name] = self.confidence_slider.value()/100
         self.stored_diameters[labels_layer_name] = self.min_diameter_slider.value()
+
         if labels_layer_name in self.shape_layer_names:
             show_info('Found existing labels layer. Please remove or rename it and try again!')
             return 
-       
+        
+        crops = convert_boxes_from_napari_view(self.viewer.layers[self.guidance_layer_name].data).tolist() if self.guided_mode else [[0, 0, img_data.shape[0], img_data.shape[1]]]
+
         # run inference
         self.organoiDL.run(img_data, 
                            labels_layer_name,
                            self.window_sizes,
                            self.downsampling,
-                           self.window_overlap)
+                           self.window_overlap,
+                           crops)
         
         # set the confidence threshold, remove small organoids and get bboxes in format to visualize
         bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
@@ -582,7 +593,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self._update_detections(bboxes, scores, box_ids, labels_layer_name)
         self._save_cache_results(labels_layer_name)
         # and update cur_shapes_name to newly created shapes layer
-        self.cur_shapes_name = labels_layer_name
 
     def _on_run_segmentation(self):
         """
@@ -914,31 +924,47 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         Called when user clicks on button to add custom organoid annotation to image
         """
-        if not self.image_layer_name: 
-            show_error('Cannot assign custom label to image. Please load an image first!')
-            return
-        if self.organoiDL.img_scale[0] == 0:
-            self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
-        new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
-        self.label2im[new_layer_name] = self.image_layer_name
-        self.stored_confidences[new_layer_name] = self.confidence_slider.value()/100
-        self.stored_diameters[new_layer_name] = self.min_diameter_slider.value()
-        self.organoiDL.next_id[new_layer_name] = 0
-
-        properties = {'box_id': [],'confidence': []}
-        text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
+        
+        if not self.guided_mode:
+            if not self.image_layer_name: 
+                show_error('Cannot assign custom label to image. Please load an image first!')
+                return
+            
+            if self.organoiDL.img_scale[0] == 0:
+                self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
+            
+            new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            self.label2im[new_layer_name] = self.image_layer_name
+            self.organoiDL.next_id[new_layer_name] = 0
+            self.stored_confidences[new_layer_name] = self.confidence_slider.value()/100
+            self.stored_diameters[new_layer_name] = self.min_diameter_slider.value()
+            properties = {'box_id': [],'confidence': []}
+            text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
                         'size': 12,
                         'anchor': 'upper_left',
                         'color': settings.TEXT_COLOR}
-        self.cur_shapes_layer = self.viewer.add_shapes( 
+            edge_color = settings.COLOR_DEFAULT
+        else:
+            new_layer_name = f'Guidance-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            self.guidance_layers.add(new_layer_name)
+            properties = {}
+            text_params = {}
+            edge_color = settings.COLOR_CLASS_1
+        
+        new_layer = self.viewer.add_shapes( 
                     name=new_layer_name,
                     scale=self.viewer.layers[self.image_layer_name].scale[:2],
                     face_color='transparent',  
                     properties = properties,
                     text = text_params,
-                    edge_color=settings.COLOR_DEFAULT,
+                    edge_color=edge_color,
                     shape_type='rectangle',
-                    edge_width=12)
+                    edge_width=12
+        )
+
+        if not self.guided_mode:
+            self.cur_shapes_layer = new_layer
+            
         self.cur_shapes_layer.current_edge_width = 12
 
     def _update_added_image(self, added_items):
@@ -946,15 +972,27 @@ class OrganoidAnalyzerWidget(QWidget):
         Update the selection box with new images if images have been added and update the self.original_images and self.original_contrast dicts.
         Set the latest added image to the current working image (self.image_layer_name)
         """
+        print(f"Added items: {added_items}")
         for layer_name in added_items:
+            self.image_layer_names.append(layer_name)
             if not layer_name.startswith('Segmentation-'):
-                try:
-                    self._preprocess(layer_name)
-                except Exception as e:
-                    show_error(f"Error preprocessing image {layer_name}: {e}")
+                #try:
+                image_data = self.viewer.layers[layer_name].data
+                print(f"Image data shape: {image_data.shape}")
+                if image_data.ndim == 4:
+                    for i in range(image_data.shape[0]):
+                        self.compute_and_check_image_hash(image_data[i], f"TL:Frame{i}:{layer_name}")
+                elif image_data.ndim == 3 or image_data.ndim == 2:
+                    self.compute_and_check_image_hash(image_data, layer_name)
+                else:
+                    show_error(f"Unsupported image format for layer {layer_name}: shape {image_data.shape}")
+                    continue
+                self.remember_choice_for_image_import = None
+                self._preprocess(layer_name, image_data)
                 self.image_layer_selection.addItem(layer_name)
                 self.image_layer_name = layer_name
                 self.image_layer_selection.setCurrentText(self.image_layer_name)
+
             self.original_images[layer_name] = self.viewer.layers[layer_name].data
             self.original_contrast[layer_name] = self.viewer.layers[self.image_layer_name].contrast_limits
 
@@ -975,35 +1013,53 @@ class OrganoidAnalyzerWidget(QWidget):
         Update the selection box by shape layer names if it they have been added, update current working shape layer and instantiate OrganoiDL if not already there
         """
         # update the drop down box displaying shape layer names for saving
+
         for idx, layer_name in enumerate(added_items):
-            self.segmentation_image_layer_selection.addItem(layer_name)
-        # set the latest added shapes layer to the shapes layer that has been selected for saving and visualisation
-        self.cur_shapes_name = added_items[0]
-        self.cur_shapes_layer = self.viewer.layers[self.cur_shapes_name]
-        # get the bounding box and update the displayed number of organoids
-        self._update_num_organoids(len(self.cur_shapes_layer.data)) 
-        # listen for a data change in the current shapes layer
-        self.organoiDL.update_bboxes_scores(self.cur_shapes_name,
+            self.shape_layer_names.append(layer_name)
+            if layer_name in self.guidance_layers:
+                self.guidance_selection.addItem(layer_name)
+                self.guidance_layer_name = layer_name
+                self.guidance_selection.setCurrentText(self.guidance_layer_name)
+                self.guided_mode = True
+            else:
+                self.segmentation_image_layer_selection.addItem(layer_name)
+                self.cur_shapes_name = layer_name
+                self.cur_shapes_layer = self.viewer.layers[self.cur_shapes_name]
+                self._update_num_organoids(len(self.cur_shapes_layer.data))
+                self.organoiDL.update_bboxes_scores(self.cur_shapes_name,
                                             self.cur_shapes_layer.data,
                                             self.cur_shapes_layer.properties['confidence'],
                                             self.cur_shapes_layer.properties['box_id']
                                             )
-        self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
+                self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
+                self.cur_shapes_layer.events.highlight.connect(self._on_shape_selected)
+                self.cur_shapes_layer.events.name.connect(self._on_layer_name_change)
         
     def _update_remove_shapes(self, removed_layers):
         """
         Update the selection box by removing shape layer names if it they been deleted and set 
         """
         # update selection box by removing image names if image has been deleted       
-        for removed_layer in removed_layers:
-            item_id = self.segmentation_image_layer_selection.findText(removed_layer)
-            self.segmentation_image_layer_selection.removeItem(item_id)
-            self.label2im.pop(removed_layer, None)
-            self.stored_confidences.pop(removed_layer, None)
-            self.stored_diameters.pop(removed_layer, None)
-            if removed_layer==self.cur_shapes_name: 
-                self._update_num_organoids(0)
-            self.organoiDL.remove_shape_from_dict(removed_layer)
+        for removed_name in removed_layers:
+            if removed_name in self.guidance_layers:
+                self.guidance_layers.remove(removed_name)
+                item_id = self.guidance_selection.findText(removed_name)
+                if item_id >= 0:
+                    self.guidance_selection.removeItem(item_id)
+                if removed_name == self.guidance_layer_name:
+                    self.guided_mode = False
+                    self.guidance_layer_name = None
+            else:
+                item_id = self.segmentation_image_layer_selection.findText(removed_name)
+                self.segmentation_image_layer_selection.removeItem(item_id)
+                self.label2im.pop(removed_name, None)
+                self.stored_confidences.pop(removed_name, None)
+                self.stored_diameters.pop(removed_name, None)
+                if removed_name==self.cur_shapes_name: 
+                    self._update_num_organoids(0)
+                    self.cur_shapes_name = ''
+                    self.cur_shapes_layer = None
+                self.organoiDL.remove_shape_from_dict(removed_name)
 
     def shapes_event_handler(self, event):
         """
@@ -1054,6 +1110,7 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         # setup all the individual boxes
         input_box = self._setup_input_box()
+        guidance_box = self._setup_guidance_box()  # Add guidance selector
         model_box = self._setup_model_box()
         window_sizes_box = self._setup_window_sizes_box()
         downsampling_box = self._setup_downsampling_box()
@@ -1065,6 +1122,7 @@ class OrganoidAnalyzerWidget(QWidget):
         input_widget = QGroupBox('Input configurations')
         vbox = QVBoxLayout()
         vbox.addLayout(input_box)
+        vbox.addLayout(guidance_box)  # Add guidance selector to layout
         vbox.addLayout(model_box)
         vbox.addLayout(window_sizes_box)
         vbox.addLayout(downsampling_box)
@@ -1073,6 +1131,35 @@ class OrganoidAnalyzerWidget(QWidget):
         vbox.addWidget(self.progress_box)
         input_widget.setLayout(vbox)
         return input_widget
+
+    def _setup_guidance_box(self):
+        """
+        Sets up the GUI part where the guidance type is selected.
+        """
+        hbox = QHBoxLayout()
+        # setup label
+        guidance_label = QLabel('Guidance layer: ', self)
+        guidance_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        # setup drop down option for selecting guidance type
+        self.guidance_selection = QComboBox()
+        self.guidance_selection.addItem('None')
+        
+        self.guidance_selection.currentIndexChanged.connect(self._on_guidance_selection_changed)
+        # and add all these to the layout
+        hbox.addWidget(guidance_label, 2)
+        hbox.addWidget(self.guidance_selection, 4)
+        return hbox
+
+    def _on_guidance_selection_changed(self, index):
+        """
+        Callback for when the guidance selection changes.
+        """
+        if self.guidance_selection.currentText() == 'None':
+            self.guided_mode = False
+            self.guidance_layer_name = None
+        else:
+            self.guided_mode = True
+            self.guidance_layer_name = self.guidance_selection.currentText()
 
     def _setup_output_widget(self):
         """
@@ -1220,6 +1307,7 @@ class OrganoidAnalyzerWidget(QWidget):
         custom_btn.setStyleSheet("border: 0px")
         detection_guidance_checkbox = QCheckBox("Detection guidance")
         detection_guidance_checkbox.setChecked(False)
+        detection_guidance_checkbox.stateChanged.connect(self._on_detection_guidance_checkbox_changed)
         hbox_custom.addStretch(1)
         hbox_custom.addWidget(custom_btn)
         hbox_custom.addSpacing(15)
@@ -1242,6 +1330,12 @@ class OrganoidAnalyzerWidget(QWidget):
     def _on_cache_checkbox_changed(self, state):
         """Called when cache checkbox is toggled"""
         self.cache_enabled = (state == Qt.Checked)
+
+    def _on_detection_guidance_checkbox_changed(self, state):
+        """
+        Called when the detection guidance checkbox is toggled.
+        """
+        self.guided_mode = (state == Qt.Checked)
 
     def _setup_annotation_mode_box(self):
         """
