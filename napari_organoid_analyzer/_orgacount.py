@@ -11,6 +11,7 @@ from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
 from napari_organoid_analyzer._utils import set_posix_windows
+import matplotlib.pyplot as plt
 import cv2
 import sys
 import logging
@@ -109,6 +110,7 @@ class OrganoiDL():
                        rescale_factor,
                        prepadded_height,
                        prepadded_width,
+                       crop_offset,
                        bboxes_list=[],
                        scores_list=[]):
         ''' Runs sliding window inference and returns predicting bounding boxes and confidence scores for each box.
@@ -126,6 +128,8 @@ class OrganoiDL():
             The image height before padding was applied
         prepadded_width: int
             The image width before padding was applied
+        crop_offset: list of int
+            The [x_min, y_min] offset of the current crop in the original image.
         bboxes_list: list of
             The
         scores_list: list of
@@ -164,10 +168,10 @@ class OrganoiDL():
                     print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
                     for bbox_id in range(len(bboxes)):
                         y1, x1, y2, x2 = bboxes[bbox_id] # predictions from model will be in form x1,y1,x2,y2
-                        x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor')
-                        x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor')
-                        y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor')
-                        y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor')
+                        x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                        x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                        y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
+                        y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
                         bboxes_list.append(torch.Tensor([x1_real, y1_real, x2_real, y2_real]))
                         scores_list.append(scores[bbox_id])
         print('Number of predictions:', len(bboxes_list))
@@ -181,7 +185,8 @@ class OrganoiDL():
             shapes_name,
             window_sizes,
             downsampling_sizes,   
-            window_overlap):
+            window_overlap, 
+            crops):
         ''' Runs inference for an image at multiple window sizes and downsampling rates using sliding window ineference.
         The results are filtered using the NMS algorithm and are then stored to dicts.
         Inputs
@@ -196,6 +201,8 @@ class OrganoiDL():
             The downsampling factor of the image, list size must match window_size
         window_overlap: float
             The window overlap for the sliding window inference.
+        crops: Numpy array of size [B, 4]
+            Bounding boxes for areas of interest in the image. If not None, the sliding window will run only on these areas.
         ''' 
         bboxes = []
         scores = []
@@ -204,22 +211,31 @@ class OrganoiDL():
             # compute the step for the sliding window, based on window overlap
             rescale_factor = 1 / downsampling
             # window size after rescaling
-            window_size = round(window_size * rescale_factor)
-            step = round(window_size * window_overlap)
-            # prepare image for model - norm, tensor, etc.
-            ready_img, prepadded_height, prepadded_width  = prepare_img(img,
-                                                                        step,
-                                                                        window_size,
-                                                                        rescale_factor)
-            # and run sliding window over whole image
-            bboxes, scores = self.sliding_window(ready_img,
-                                                 step,
-                                                 window_size,
-                                                 rescale_factor,
-                                                 prepadded_height,
-                                                 prepadded_width,
-                                                 bboxes,
-                                                 scores)
+            current_window_size = round(window_size * rescale_factor) # Use a different variable name
+            step = round(current_window_size * window_overlap)
+
+            for crop_coords in crops:
+                x1, y1, x2, y2 = list(map(int, crop_coords))
+
+                cropped_img = img[x1:x2, y1:y2]
+
+                # prepare image for model - norm, tensor, etc.
+                ready_img, prepadded_height, prepadded_width = prepare_img(cropped_img,
+                                                                            step,
+                                                                            current_window_size,
+                                                                            rescale_factor)
+                crop_offset_for_sliding_window = [x1, y1]
+
+
+                bboxes, scores = self.sliding_window(ready_img,
+                                                     step,
+                                                     current_window_size, # use the rescaled window size
+                                                     rescale_factor,
+                                                     prepadded_height,
+                                                     prepadded_width,
+                                                     crop_offset_for_sliding_window,
+                                                     bboxes,
+                                                     scores)
         # stack results
         bboxes = torch.stack(bboxes)
         scores = torch.Tensor(scores)

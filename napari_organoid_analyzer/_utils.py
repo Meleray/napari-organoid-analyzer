@@ -277,3 +277,27 @@ def update_version_in_mmdet_init_file(package_name, old_version, new_version):
         for line in lines:
             if f"mmcv_maximum_version = '{old_version}'" in line:
                 file.write(line.replace(old_version, new_version))
+
+def validate_bboxes(bboxes, image_shape):
+    """
+    Validates whether all bounding boxes are contained within the image dimensions.
+
+    Args:
+        bboxes (list of np.ndarray): List of bounding boxes, where each box
+                                     is a 4x2 numpy array of its vertices
+                                     (e.g., [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]).
+        image_shape (tuple): Shape of the image as (height, width).
+
+    Returns:
+        bool: True if all bounding boxes are valid, False otherwise.
+    """
+    img_height, img_width = image_shape
+    for bbox_vertices in bboxes:
+        x1 = bbox_vertices[0][0]
+        x2 = bbox_vertices[2][0]
+        y1 = bbox_vertices[0][1]
+        y2 = bbox_vertices[2][1]
+        
+        if not (0 <= x1 < x2 <= img_height and 0 <= y1 < y2 <= img_width):
+            return False
+    return True
