@@ -16,6 +16,11 @@ This plugin has been tested with python 3.10 - you may consider using conda or p
 
 ```pip install git+https://github.com/facebookresearch/segment-anything.git```
 
+Or 
+```git clone https://github.com/facebookresearch/segment-anything.git```
+```cd segment-anything```
+```pip install .```
+
 3. Manually install OpenMMLab dependencies:
 
      ``` 
