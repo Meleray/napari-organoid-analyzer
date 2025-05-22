@@ -68,12 +68,6 @@ def collate_instance_masks(masks, color=False):
             result[:, :, c] = np.where(masks[i], colors[i, c], result[:, :, c])
     return result
 
-def get_viewer_layer_name(name):
-    """ Get viewer layer name from the saved frame or image name"""
-    if name.startswith('TL_'):
-        name = '_'.join(name.split('_')[2:])
-    return name
-
 def add_local_models():
     """ Checks the models directory for any local models previously added by the user.
     If some are found then these are added to the model dictionary (see settings). """
@@ -301,3 +295,7 @@ def validate_bboxes(bboxes, image_shape):
         if not (0 <= x1 < x2 <= img_height and 0 <= y1 < y2 <= img_width):
             return False
     return True
+
+def get_timelapse_name(name):
+    """ Get the name of the timelapse from the napari layer name """
+    return ':'.join(name.split(':')[2:])
