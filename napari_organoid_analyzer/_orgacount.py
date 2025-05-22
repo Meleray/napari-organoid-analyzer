@@ -10,6 +10,7 @@ import mmdet
 from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
+from napari_organoid_analyzer._utils import set_posix_windows
 import cv2
 import sys
 import logging
@@ -75,7 +76,8 @@ class OrganoiDL():
         self.model_name = model_name
         model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
         if model_name == 'SAMOS':
-            checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
+            with set_posix_windows():
+                checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
             self.model = DetectionTransformer(**checkpoint['hyper_parameters'])
             new_state_dict = {}
             for key, value in checkpoint['state_dict'].items():

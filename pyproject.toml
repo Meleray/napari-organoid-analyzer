@@ -1,10 +1,7 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools_scm"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-
-[tool.setuptools_scm]
-write_to = "napari_organoid_analyzer/_version.py"
 
 [tool.black]
 line-length = 79

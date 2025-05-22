@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import os
+import pathlib
 from pathlib import Path
 import pkgutil
 
@@ -15,6 +16,21 @@ import torch
 from torchvision.ops import nms
 
 from napari_organoid_analyzer import settings
+
+
+@contextmanager
+def set_posix_windows():
+    """Replaces PosixPath temporarily with WindowsPath on Windows.
+    
+    Necessary for loading model checkpoints which contain PosixPaths on Windows."""
+    posix_backup = pathlib.PosixPath
+    try:
+        if os.name == 'nt': # Only on Windows, replace PosixPath temporarily with WindowsPath
+            pathlib.PosixPath = pathlib.WindowsPath
+        yield
+    finally:
+        pathlib.PosixPath = posix_backup
+
 
 def collate_instance_masks(masks, color=False):
     """
