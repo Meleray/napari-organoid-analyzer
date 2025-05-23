@@ -228,6 +228,12 @@ class OrganoidAnalyzerWidget(QWidget):
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
         
+        # # The image hash might be missing if the image was opened before the Plugin was started.
+        # if corr_image_name not in self.image_hashes:
+        #     image_data = self.viewer.layers[corr_image_name].data
+        #     image_hash = compute_image_hash(image_data)
+        #     self.image_hashes[corr_image_name] = image_hash
+
         image_hash = self.image_hashes[corr_image_name]
 
         cache_file = os.path.join(
@@ -388,7 +394,8 @@ class OrganoidAnalyzerWidget(QWidget):
                     cache_data = self._load_cached_results(cache_file)
                     if cache_data:
                         self._create_shapes_from_cache(name, cache_data)
-            return
+                        return True
+            return False
 
         cache_file = self._check_for_cached_results(image_hash)
         if cache_file:
@@ -415,6 +422,8 @@ class OrganoidAnalyzerWidget(QWidget):
                 cache_data = self._load_cached_results(cache_file)
                 if cache_data:
                     self._create_shapes_from_cache(name, cache_data)
+                    return True
+        return False
 
     def _removed_layer(self, event):
         """ Is called whenever a layer has been deleted (by the user) and removes the layer from GUI and backend. """
@@ -555,6 +564,10 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         Detect organoids from the image (or timelapse frame) and create a shapes layer
         """
+
+        loaded_cached_data = self.compute_and_check_image_hash(img_data, labels_layer_name)
+        if loaded_cached_data:
+            return
 
         if img_data.ndim == 3:
             if img_data.shape[2] == 4:
