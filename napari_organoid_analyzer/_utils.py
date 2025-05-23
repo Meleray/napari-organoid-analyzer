@@ -101,7 +101,7 @@ def get_diams(bbox):
 
 def write_to_json(name, data):
     """ Write data to a json file. Here data is a dict """
-    with open(str(name), 'w') as outfile:
+    with open(name, 'w') as outfile:
         json.dump(data, outfile)  
 
 def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales, labels):
