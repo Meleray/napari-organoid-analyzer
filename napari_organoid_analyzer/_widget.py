@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List
 
 from skimage.io import imsave
@@ -226,8 +227,8 @@ class OrganoidAnalyzerWidget(QWidget):
         if corr_image_name not in self.viewer.layers:
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
-
-        image_hash = self.image_hashes[self.label2im[layer_name]]
+        
+        image_hash = self.image_hashes[corr_image_name]
 
         cache_file = os.path.join(
             str(settings.DETECTIONS_DIR), 
@@ -659,6 +660,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if not export_path:
             show_error("No export folder selected.")
             return
+        export_path = Path(export_path)
         
         export_options = export_dialog.get_export_options()
         selected_features = export_dialog.get_selected_features()
@@ -683,11 +685,11 @@ class OrganoidAnalyzerWidget(QWidget):
             exported_items.append("features")
         
         if exported_items:
-            show_info(f"Export completed successfully to {export_path}\nExported: {', '.join(exported_items)}")
+            show_info(f"Export completed successfully to {str(export_path)}\nExported: {', '.join(exported_items)}")
         else:
             show_warning("No items were selected for export.")
 
-    def _export_bboxes(self, label_layer, export_path):
+    def _export_bboxes(self, label_layer, export_path: Path):
         """Export bounding boxes to JSON file"""
         bboxes = label_layer.data
         
@@ -736,10 +738,10 @@ class OrganoidAnalyzerWidget(QWidget):
         )
             
         # Write bbox coordinates to json
-        json_file_path = os.path.join(export_path, f"{self.label_layer_name}_bboxes.json")
+        json_file_path = export_path / f"{self.label_layer_name}_bboxes.json"
         utils.write_to_json(json_file_path, data_json)
 
-    def _export_instance_masks(self, label_layer, export_path):
+    def _export_instance_masks(self, label_layer, export_path: Path):
         """Export instance masks to NPY"""
         
         instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
@@ -751,10 +753,10 @@ class OrganoidAnalyzerWidget(QWidget):
         box_ids = label_layer.properties['box_id']
         mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
             
-        instance_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_instance_masks.npy")
+        instance_mask_file_path = export_path / f"{self.label_layer_name}_instance_masks.npy"
         np.save(instance_mask_file_path, mask_dict)
 
-    def _export_collated_masks(self, label_layer, export_path):
+    def _export_collated_masks(self, label_layer, export_path: Path):
         """Export collated mask to NPY"""
         
         instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
@@ -763,10 +765,10 @@ class OrganoidAnalyzerWidget(QWidget):
             return
 
         collated_mask = collate_instance_masks(instance_masks)
-        collated_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_collated_mask.npy")
+        collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
         np.save(collated_mask_file_path, collated_mask)
 
-    def _export_features(self, label_layer, export_path, selected_features):
+    def _export_features(self, label_layer, export_path: Path, selected_features):
         """Export selected features to CSV"""
         # Extract only the selected features
         features_to_export = {}
@@ -781,7 +783,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # Convert to pandas DataFrame
         if features_to_export:
             df = pd.DataFrame(features_to_export)
-            features_file_path = os.path.join(export_path, f"{self.label_layer_name}_features.csv")
+            features_file_path = export_path / f"{self.label_layer_name}_features.csv"
             df.to_csv(features_file_path, index=False)
         else:
             show_warning("No features selected for export or no features available.")
