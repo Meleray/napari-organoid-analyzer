@@ -228,13 +228,7 @@ class OrganoidAnalyzerWidget(QWidget):
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
         
-        # # The image hash might be missing if the image was opened before the Plugin was started.
-        # if corr_image_name not in self.image_hashes:
-        #     image_data = self.viewer.layers[corr_image_name].data
-        #     image_hash = compute_image_hash(image_data)
-        #     self.image_hashes[corr_image_name] = image_hash
-
-        image_hash = self.image_hashes[corr_image_name]
+        image_hash = self.image_hashes[self.label2im[layer_name]]
 
         cache_file = os.path.join(
             str(settings.DETECTIONS_DIR), 
@@ -293,7 +287,7 @@ class OrganoidAnalyzerWidget(QWidget):
             return False
             
         # Create a new shapes layer
-        labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         self.organoiDL.update_bboxes_scores(labels_layer_name, bboxes, scores, box_ids)
         bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
         
@@ -374,7 +368,7 @@ class OrganoidAnalyzerWidget(QWidget):
             image_data = self.viewer.layers[name].data
             if image_data.ndim == 4:
                 for i in range(image_data.shape[0]):
-                    self.compute_and_check_image_hash(image_data[i], f"TL:Frame{i}:{name}")
+                    self.compute_and_check_image_hash(image_data[i], f"TL_Frame{i}_{name}")
                 self.remember_choice_for_image_import = None
             elif image_data.ndim == 3 or image_data.ndim == 2:
                 self.compute_and_check_image_hash(image_data, name)
@@ -541,15 +535,15 @@ class OrganoidAnalyzerWidget(QWidget):
         img_data = self.viewer.layers[self.image_layer_name].data
 
         if img_data.ndim == 3 or img_data.ndim == 2:
-            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             self.label2im[labels_layer_name] = self.image_layer_name
             self._detect_organoids(img_data, labels_layer_name)
         elif img_data.ndim == 4:
             frame_names = []
             for i in progress(range(img_data.shape[0])):
-                labels_layer_name = f'TL:Frame{i}:{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+                labels_layer_name = f'TL_Frame{i}_{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
                 frame_names.append(labels_layer_name)
-                self.label2im[labels_layer_name] = f"TL:Frame{i}:{self.image_layer_name}"
+                self.label2im[labels_layer_name] = f"TL_Frame{i}_{self.image_layer_name}"
                 self._detect_organoids(img_data[i], labels_layer_name)
             self.timelapses.append(frame_names)
         else:
@@ -625,7 +619,7 @@ class OrganoidAnalyzerWidget(QWidget):
         image = self.viewer.layers[self.label2im[self.label_layer_name]].data
         if image.shape[2] == 4:
             image = image[:, :, :3]
-        segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H:%M:%S')}"
+        segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
         
         masks, features = self.organoiDL.run_segmentation(image, self.label_layer_name, bboxes)
         
@@ -934,7 +928,7 @@ class OrganoidAnalyzerWidget(QWidget):
             return
         if self.organoiDL.img_scale[0] == 0:
             self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
-        new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         self.label2im[new_layer_name] = self.image_layer_name
         self.stored_confidences[new_layer_name] = self.confidence_slider.value()/100
         self.stored_diameters[new_layer_name] = self.min_diameter_slider.value()
@@ -1452,7 +1446,7 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         self.label_layer_name = self.segmentation_image_layer_selection.currentText()
         # Show or hide the "Run for entire timelapse" checkbox based on layer name
-        if self.label_layer_name.startswith("TL:Frame"):
+        if self.label_layer_name.startswith("TL_Frame"):
             self.run_for_timelapse_checkbox.setVisible(True)
         else:
             self.run_for_timelapse_checkbox.setVisible(False)

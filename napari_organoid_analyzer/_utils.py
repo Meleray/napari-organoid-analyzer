@@ -17,6 +17,8 @@ from torchvision.ops import nms
 
 from napari_organoid_analyzer import settings
 
+from ctypes.wintypes import MAX_PATH
+
 
 @contextmanager
 def set_posix_windows():
@@ -30,6 +32,20 @@ def set_posix_windows():
         yield
     finally:
         pathlib.PosixPath = posix_backup
+
+
+def check_filename_integrity(path: Path):
+    if os.name == 'nt':
+        path_max = MAX_PATH
+    else:
+        try:
+            path_max = os.pathconf(path.parent, 'PC_PATH_MAX')
+        except AttributeError:
+            # Set fixed to 4096
+            path_max = 4096
+    
+    if len(str(path)) >= path_max:
+        raise RuntimeWarning(f'The file path exceeds the maximum length of {path_max} letters by {len(str(path)) + 1 - path_max}. Please choose a filename or folder with a shorter path.')
 
 
 def collate_instance_masks(masks, color=False):
@@ -54,8 +70,8 @@ def collate_instance_masks(masks, color=False):
 
 def get_viewer_layer_name(name):
     """ Get viewer layer name from the saved frame or image name"""
-    if name.startswith('TL:'):
-        name = ':'.join(name.split(':')[2:])
+    if name.startswith('TL_'):
+        name = '_'.join(name.split('_')[2:])
     return name
 
 def add_local_models():
@@ -99,9 +115,10 @@ def get_diams(bbox):
     dy = abs(y1_real - y2_real)
     return dx, dy
 
-def write_to_json(name, data):
+def write_to_json(name: Path, data):
     """ Write data to a json file. Here data is a dict """
-    with open(str(name), 'w') as outfile:
+    check_filename_integrity(name)
+    with open(name, 'w') as outfile:
         json.dump(data, outfile)  
 
 def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales, labels):
@@ -131,8 +148,9 @@ def compute_image_hash(image):
     image_hash = hashlib.md5(image_bytes).hexdigest()
     return image_hash
 
-def write_to_csv(name, data):
+def write_to_csv(name: Path, data):
     """ Write data to a csv file. Here data is a list of lists, where each item represents a row in the csv file. """
+    check_filename_integrity(name)
     with open(name, 'w') as f:
         write = csv.writer(f, delimiter=';')
         write.writerow(['OrganoidID', 'D1[um]','D2[um]', 'Area [um^2]'])
