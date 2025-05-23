@@ -559,7 +559,7 @@ class OrganoidAnalyzerWidget(QWidget):
         Detect organoids from the image (or timelapse frame) and create a shapes layer
         """
 
-        loaded_cached_data = self.compute_and_check_image_hash(img_data, labels_layer_name)
+        loaded_cached_data = self.compute_and_check_image_hash(img_data, self.label2im[labels_layer_name])
         if loaded_cached_data:
             return
 
