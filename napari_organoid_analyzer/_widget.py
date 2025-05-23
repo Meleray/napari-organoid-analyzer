@@ -948,6 +948,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     edge_color=settings.COLOR_DEFAULT,
                     shape_type='rectangle',
                     edge_width=12)
+        self.cur_shapes_layer.mode = 'add_rectangle'
         self.cur_shapes_layer.current_edge_width = 12
 
     def _update_added_image(self, added_items):
