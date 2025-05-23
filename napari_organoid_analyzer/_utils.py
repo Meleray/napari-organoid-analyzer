@@ -54,8 +54,8 @@ def collate_instance_masks(masks, color=False):
 
 def get_viewer_layer_name(name):
     """ Get viewer layer name from the saved frame or image name"""
-    if name.startswith('TL:'):
-        name = ':'.join(name.split(':')[2:])
+    if name.startswith('TL_'):
+        name = '_'.join(name.split('_')[2:])
     return name
 
 def add_local_models():

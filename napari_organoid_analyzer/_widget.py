@@ -228,7 +228,7 @@ class OrganoidAnalyzerWidget(QWidget):
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
         
-        image_hash = self.image_hashes[corr_image_name]
+        image_hash = self.image_hashes[self.label2im[layer_name]]
 
         cache_file = os.path.join(
             str(settings.DETECTIONS_DIR), 
@@ -368,7 +368,7 @@ class OrganoidAnalyzerWidget(QWidget):
             image_data = self.viewer.layers[name].data
             if image_data.ndim == 4:
                 for i in range(image_data.shape[0]):
-                    self.compute_and_check_image_hash(image_data[i], f"TL_Frame{i}__{name}")
+                    self.compute_and_check_image_hash(image_data[i], f"TL_Frame{i}_{name}")
                 self.remember_choice_for_image_import = None
             elif image_data.ndim == 3 or image_data.ndim == 2:
                 self.compute_and_check_image_hash(image_data, name)
@@ -538,9 +538,9 @@ class OrganoidAnalyzerWidget(QWidget):
         elif img_data.ndim == 4:
             frame_names = []
             for i in progress(range(img_data.shape[0])):
-                labels_layer_name = f'TL_Frame{i}__{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
+                labels_layer_name = f'TL_Frame{i}_{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
                 frame_names.append(labels_layer_name)
-                self.label2im[labels_layer_name] = f"TL_Frame{i}__{self.image_layer_name}"
+                self.label2im[labels_layer_name] = f"TL_Frame{i}_{self.image_layer_name}"
                 self._detect_organoids(img_data[i], labels_layer_name)
             self.timelapses.append(frame_names)
         else:
