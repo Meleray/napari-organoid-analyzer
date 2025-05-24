@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List
 
 from skimage.io import imsave
@@ -226,7 +227,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if corr_image_name not in self.viewer.layers:
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
-
+        
         image_hash = self.image_hashes[self.label2im[layer_name]]
 
         cache_file = os.path.join(
@@ -286,7 +287,7 @@ class OrganoidAnalyzerWidget(QWidget):
             return False
             
         # Create a new shapes layer
-        labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         self.organoiDL.update_bboxes_scores(labels_layer_name, bboxes, scores, box_ids)
         bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
         
@@ -367,7 +368,7 @@ class OrganoidAnalyzerWidget(QWidget):
             image_data = self.viewer.layers[name].data
             if image_data.ndim == 4:
                 for i in range(image_data.shape[0]):
-                    self.compute_and_check_image_hash(image_data[i], f"TL:Frame{i}:{name}")
+                    self.compute_and_check_image_hash(image_data[i], f"TL_Frame{i}_{name}")
                 self.remember_choice_for_image_import = None
             elif image_data.ndim == 3 or image_data.ndim == 2:
                 self.compute_and_check_image_hash(image_data, name)
@@ -531,15 +532,15 @@ class OrganoidAnalyzerWidget(QWidget):
         img_data = self.viewer.layers[self.image_layer_name].data
 
         if img_data.ndim == 3 or img_data.ndim == 2:
-            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             self.label2im[labels_layer_name] = self.image_layer_name
             self._detect_organoids(img_data, labels_layer_name)
         elif img_data.ndim == 4:
             frame_names = []
             for i in progress(range(img_data.shape[0])):
-                labels_layer_name = f'TL:Frame{i}:{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+                labels_layer_name = f'TL_Frame{i}_{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
                 frame_names.append(labels_layer_name)
-                self.label2im[labels_layer_name] = f"TL:Frame{i}:{self.image_layer_name}"
+                self.label2im[labels_layer_name] = f"TL_Frame{i}_{self.image_layer_name}"
                 self._detect_organoids(img_data[i], labels_layer_name)
             self.timelapses.append(frame_names)
         else:
@@ -611,7 +612,7 @@ class OrganoidAnalyzerWidget(QWidget):
         image = self.viewer.layers[self.label2im[self.label_layer_name]].data
         if image.shape[2] == 4:
             image = image[:, :, :3]
-        segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H:%M:%S')}"
+        segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
         
         masks, features = self.organoiDL.run_segmentation(image, self.label_layer_name, bboxes)
         
@@ -659,6 +660,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if not export_path:
             show_error("No export folder selected.")
             return
+        export_path = Path(export_path)
         
         export_options = export_dialog.get_export_options()
         selected_features = export_dialog.get_selected_features()
@@ -683,11 +685,11 @@ class OrganoidAnalyzerWidget(QWidget):
             exported_items.append("features")
         
         if exported_items:
-            show_info(f"Export completed successfully to {export_path}\nExported: {', '.join(exported_items)}")
+            show_info(f"Export completed successfully to {str(export_path)}\nExported: {', '.join(exported_items)}")
         else:
             show_warning("No items were selected for export.")
 
-    def _export_bboxes(self, label_layer, export_path):
+    def _export_bboxes(self, label_layer, export_path: Path):
         """Export bounding boxes to JSON file"""
         bboxes = label_layer.data
         
@@ -736,10 +738,10 @@ class OrganoidAnalyzerWidget(QWidget):
         )
             
         # Write bbox coordinates to json
-        json_file_path = os.path.join(export_path, f"{self.label_layer_name}_bboxes.json")
+        json_file_path = export_path / f"{self.label_layer_name}_bboxes.json"
         utils.write_to_json(json_file_path, data_json)
 
-    def _export_instance_masks(self, label_layer, export_path):
+    def _export_instance_masks(self, label_layer, export_path: Path):
         """Export instance masks to NPY"""
         
         instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
@@ -751,10 +753,10 @@ class OrganoidAnalyzerWidget(QWidget):
         box_ids = label_layer.properties['box_id']
         mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
             
-        instance_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_instance_masks.npy")
+        instance_mask_file_path = export_path / f"{self.label_layer_name}_instance_masks.npy"
         np.save(instance_mask_file_path, mask_dict)
 
-    def _export_collated_masks(self, label_layer, export_path):
+    def _export_collated_masks(self, label_layer, export_path: Path):
         """Export collated mask to NPY"""
         
         instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
@@ -763,10 +765,10 @@ class OrganoidAnalyzerWidget(QWidget):
             return
 
         collated_mask = collate_instance_masks(instance_masks)
-        collated_mask_file_path = os.path.join(export_path, f"{self.label_layer_name}_collated_mask.npy")
+        collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
         np.save(collated_mask_file_path, collated_mask)
 
-    def _export_features(self, label_layer, export_path, selected_features):
+    def _export_features(self, label_layer, export_path: Path, selected_features):
         """Export selected features to CSV"""
         # Extract only the selected features
         features_to_export = {}
@@ -781,7 +783,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # Convert to pandas DataFrame
         if features_to_export:
             df = pd.DataFrame(features_to_export)
-            features_file_path = os.path.join(export_path, f"{self.label_layer_name}_features.csv")
+            features_file_path = export_path / f"{self.label_layer_name}_features.csv"
             df.to_csv(features_file_path, index=False)
         else:
             show_warning("No features selected for export or no features available.")
@@ -919,7 +921,7 @@ class OrganoidAnalyzerWidget(QWidget):
             return
         if self.organoiDL.img_scale[0] == 0:
             self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
-        new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+        new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         self.label2im[new_layer_name] = self.image_layer_name
         self.stored_confidences[new_layer_name] = self.confidence_slider.value()/100
         self.stored_diameters[new_layer_name] = self.min_diameter_slider.value()
@@ -1437,7 +1439,7 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         self.label_layer_name = self.segmentation_image_layer_selection.currentText()
         # Show or hide the "Run for entire timelapse" checkbox based on layer name
-        if self.label_layer_name.startswith("TL:Frame"):
+        if self.label_layer_name.startswith("TL_Frame"):
             self.run_for_timelapse_checkbox.setVisible(True)
         else:
             self.run_for_timelapse_checkbox.setVisible(False)
