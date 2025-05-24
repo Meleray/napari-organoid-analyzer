@@ -388,7 +388,8 @@ class OrganoidAnalyzerWidget(QWidget):
                     cache_data = self._load_cached_results(cache_file)
                     if cache_data:
                         self._create_shapes_from_cache(name, cache_data)
-            return
+                        return True
+            return False
 
         cache_file = self._check_for_cached_results(image_hash)
         if cache_file:
@@ -415,6 +416,8 @@ class OrganoidAnalyzerWidget(QWidget):
                 cache_data = self._load_cached_results(cache_file)
                 if cache_data:
                     self._create_shapes_from_cache(name, cache_data)
+                    return True
+        return False
 
     def _removed_layer(self, event):
         """ Is called whenever a layer has been deleted (by the user) and removes the layer from GUI and backend. """
@@ -555,6 +558,10 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         Detect organoids from the image (or timelapse frame) and create a shapes layer
         """
+
+        loaded_cached_data = self.compute_and_check_image_hash(img_data, self.label2im[labels_layer_name])
+        if loaded_cached_data:
+            return
 
         if img_data.ndim == 3:
             if img_data.shape[2] == 4:
@@ -919,6 +926,13 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.image_layer_name: 
             show_error('Cannot assign custom label to image. Please load an image first!')
             return
+        
+        # Check if cached detections should be loaded:
+        img_data = self.viewer.layers[self.image_layer_name].data
+        loaded_cached_data = self.compute_and_check_image_hash(img_data, self.image_layer_name)
+        if loaded_cached_data:
+            return
+
         if self.organoiDL.img_scale[0] == 0:
             self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
         new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
@@ -942,6 +956,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     shape_type='rectangle',
                     edge_width=12)
         self.cur_shapes_layer.current_edge_width = 12
+        self._save_cache_results(self.cur_shapes_name)
 
     def _update_added_image(self, added_items):
         """
