@@ -245,7 +245,10 @@ class OrganoidAnalyzerWidget(QWidget):
             show_error(f"Image layer {self.label2im[layer_name]} not found in viewer")
             return
         
-        image_hash = self.image_hashes[self.label2im[layer_name]]
+        if layer_name.startswith("TL_Frame"):
+            image_hash = self.image_hashes[f"{layer_name.split('_')[1]}_{corr_image_name}"]
+        else:
+            image_hash = self.image_hashes[self.label2im[layer_name]]
 
         cache_file = os.path.join(
             str(settings.DETECTIONS_DIR), 
@@ -268,6 +271,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 
             # Write the data to the cache file
             json.dump(cache_data, f)
+            show_info(f"Saved detection results to cache file: {cache_file}")
                 
         self.cache_index[image_hash] = cache_file
         self._save_cache_index()
@@ -304,7 +308,7 @@ class OrganoidAnalyzerWidget(QWidget):
             
         # Create a new shapes layer
         if labels_layer_name is None:
-            labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
 
         self.organoiDL.update_bboxes_scores(labels_layer_name, bboxes, scores, box_ids, 0, 0)
         bboxes, scores, box_ids = self.organoiDL.apply_params(labels_layer_name, self.confidence, self.min_diameter)
@@ -335,7 +339,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self._update_cur_shapes_layer_label_and_checkbox()
         self._update_num_organoids(len(bboxes))
 
-        if labels_layer_name.startswith("TL:Frame"):
+        if labels_layer_name.startswith("TL_Frame"):
             timelapse_name = get_timelapse_name(labels_layer_name)
             if not timelapse_name in self.timelapses:
                 self.timelapses[timelapse_name] = set()
@@ -375,7 +379,7 @@ class OrganoidAnalyzerWidget(QWidget):
     def _update_cur_shapes_layer_label_and_checkbox(self):
         """Update the label and checkbox for the current shapes layer name and timelapse option."""
         self.cur_shapes_layer_label.setText(f"Current shapes layer: {self.cur_shapes_layer.name if self.cur_shapes_layer else 'None'}")
-        if self.cur_shapes_layer and self.cur_shapes_layer.name.startswith("TL:Frame"):
+        if self.cur_shapes_layer and self.cur_shapes_layer.name.startswith("TL_Frame"):
             self.apply_to_timelapse_checkbox.setVisible(True)
         else:
             self.apply_to_timelapse_checkbox.setVisible(False)
@@ -413,7 +417,12 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def compute_and_check_image_hash(self, image_data, image_name, shapes_name=None):
         image_hash = compute_image_hash(image_data)
-        self.image_hashes[image_name] = image_hash
+
+        if shapes_name and shapes_name.startswith("TL_Frame"):
+            save_name = f"{shapes_name.split('_')[1]}_{image_name}"
+            self.image_hashes[save_name] = image_hash
+        else:
+            self.image_hashes[image_name] = image_hash
         
         # If the user has already chosen to remember their choice, use it
         if self.remember_choice_for_image_import is not None:
@@ -430,8 +439,8 @@ class OrganoidAnalyzerWidget(QWidget):
             from qtpy.QtWidgets import QMessageBox, QCheckBox, QVBoxLayout
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle('Cached Results Available')
-            if shapes_name and shapes_name.startswith("TL:Frame"):
-                msg_box.setText(f"Found cached detection results for timelapse {image_name} ({shapes_name.split(':')[1]}). Load them?")
+            if shapes_name and shapes_name.startswith("TL_Frame"):
+                msg_box.setText(f"Found cached detection results for timelapse {image_name} ({shapes_name.split('_')[1]}). Load them?")
             else:
                 msg_box.setText(f'Found cached detection results for image {image_name}. Load them?')
             msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -586,7 +595,7 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[:2]):
                 show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
                 return
-            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             self.label2im[labels_layer_name] = self.image_layer_name
             self.viewer.window._status_bar._toggle_activity_dock(True)
             self._detect_organoids(img_data, labels_layer_name)
@@ -594,14 +603,12 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[1:3]):
                 show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
                 return
-            timelapse_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            timelapse_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             frame_names = []
             self.viewer.window._status_bar._toggle_activity_dock(True)
             for i in progress(range(img_data.shape[0])):
-                labels_layer_name = f'TL_Frame{i}_{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
-                frame_names.append(labels_layer_name)
-                self.label2im[labels_layer_name] = f"TL:Frame{i}:{self.image_layer_name}"
-                self.viewer.window._status_bar._toggle_activity_dock(True)
+                labels_layer_name = f'TL_Frame{i}_{timelapse_name}'
+                self.label2im[labels_layer_name] = self.image_layer_name
                 self._detect_organoids(img_data[i], labels_layer_name)
                 frame_names.append(labels_layer_name)
             self.cur_timelapse_name = timelapse_name
@@ -699,7 +706,7 @@ class OrganoidAnalyzerWidget(QWidget):
             final_image = np.zeros_like(image_data, dtype=np.uint8)
 
             for i in progress(range(total_frames)):
-                frame_layer_name = f'TL:Frame{i}:{timelapse_name}'
+                frame_layer_name = f'TL_Frame{i}_{timelapse_name}'
                 if not frame_layer_name in self.timelapses[timelapse_name] or not frame_layer_name in self.viewer.layers:
                     show_warning(f"No detection data for frame#{i}. Skipping.")
                     continue
@@ -726,8 +733,8 @@ class OrganoidAnalyzerWidget(QWidget):
             labels_layer = self.viewer.layers[self.label_layer_name]
             bboxes = convert_boxes_from_napari_view(labels_layer.data)
 
-            if self.label_layer_name.startswith("TL:Frame"):
-                frame_idx = int(self.label_layer_name.split(':')[1][5:])
+            if self.label_layer_name.startswith("TL_Frame"):
+                frame_idx = int(self.label_layer_name.split('_')[1][5:])
                 image = self.viewer.layers[self.label2im[self.label_layer_name]].data[frame_idx]
             else:
                 image = self.viewer.layers[self.label2im[self.label_layer_name]].data
@@ -736,7 +743,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 image = image[:, :, :3]
             print(f"Segmenting image {self.label2im[self.label_layer_name]} with shape {image.shape}")
     
-            segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H:%M:%S')}"
+            segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
     
             masks, features = self.organoiDL.run_segmentation(image, self.label_layer_name, bboxes)
     
@@ -954,7 +961,7 @@ class OrganoidAnalyzerWidget(QWidget):
         with utils.set_dict_key( self.cur_shapes_layer.metadata, 'napari-organoid-counter:_rerun', True):
             # first update bboxes in organoiDLin case user has added/removed
             if self.apply_to_timelapse_checkbox.isVisible() and self.apply_to_timelapse_checkbox.isChecked():
-                if not self.cur_shapes_layer.name.startswith("TL:Frame"):
+                if not self.cur_shapes_layer.name.startswith("TL_Frame"):
                     show_error("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
                 timelapse_name = get_timelapse_name(self.cur_shapes_layer.name)
                 if timelapse_name not in self.timelapses or self.cur_shapes_layer.name in self.timelapses:
@@ -1089,7 +1096,7 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.organoiDL.img_scale[0] == 0:
                 self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
 
-            new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            new_layer_name = f'{self.image_layer_name}-Labels-Custom-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             properties = {'box_id': [],'confidence': []}
             text_params = {'string': 'ID: {box_id}\nConf.: {confidence:.2f}',
                         'size': 12,
@@ -1116,9 +1123,9 @@ class OrganoidAnalyzerWidget(QWidget):
                 if reply == QMessageBox.Yes:
                     # Create a labels layer for each frame
                     for i in range(img_data.shape[0]):
-                        frame_layer_name = f'TL:Frame{i}:{timelapse_name}'
+                        frame_layer_name = f'TL_Frame{i}_{timelapse_name}'
                         if not frame_layer_name in self.timelapses[timelapse_name]:
-                            self.label2im[frame_layer_name] = f"TL:Frame{i}:{self.image_layer_name}"
+                            self.label2im[frame_layer_name] = f"TL_Frame{i}_{self.image_layer_name}"
                             self.organoiDL.next_id[frame_layer_name] = 0
                             new_layer = self.viewer.add_shapes(
                                 name=frame_layer_name,
@@ -1143,11 +1150,11 @@ class OrganoidAnalyzerWidget(QWidget):
                     if cur_frame >= img_data.shape[0]:
                         show_error(f"Current frame index {cur_frame} exceeds the number of frames in the image.")
                         return
-                    frame_layer_name = f'TL:Frame{cur_frame}:{self.image_layer_name}-Labels-Custom-'
+                    frame_layer_name = f'TL_Frame{cur_frame}_{self.image_layer_name}-Labels-Custom-'
                     if frame_layer_name in self.timelapses[timelapse_name]:
                         show_warning(f"Layer '{frame_layer_name}' already exists.")
                         return
-                    self.label2im[frame_layer_name] = f"TL:Frame{cur_frame}:{self.image_layer_name}"
+                    self.label2im[frame_layer_name] = f"TL_Frame{cur_frame}_{self.image_layer_name}"
                     self.organoiDL.next_id[frame_layer_name] = 0
                     new_layer = self.viewer.add_shapes(
                         name=frame_layer_name,
@@ -1175,8 +1182,8 @@ class OrganoidAnalyzerWidget(QWidget):
                     shape_type='rectangle',
                     edge_width=12
                 )
-                self.stored_confidences[frame_layer_name] = self.confidence
-                self.stored_diameters[frame_layer_name] = self.min_diameter
+                self.stored_confidences[new_layer_name] = self.confidence
+                self.stored_diameters[new_layer_name] = self.min_diameter
 
             self.cur_shapes_layer = new_layer
             
@@ -1186,7 +1193,7 @@ class OrganoidAnalyzerWidget(QWidget):
             self._save_cache_results(self.cur_shapes_layer.name)
 
         else:
-            new_layer_name = f'Guidance-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+            new_layer_name = f'Guidance-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
             self.guidance_layers.add(new_layer_name)
             properties = {}
             text_params = {}
@@ -1209,14 +1216,14 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         for layer_name in added_items:
             self.image_layer_names.append(layer_name)
-            if not layer_name.startswith('Segmentation-') and not layer_name.startswith('TL:'):
+            if not layer_name.startswith('Segmentation-') and not layer_name.startswith('TL_'):
                 #try:
                 image_data = self.viewer.layers[layer_name].data
                 if image_data.ndim == 4:
                     self.timelapse_image_layers.add(layer_name)
-                    timelapse_name = f'{layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H:%M:%S")}'
+                    timelapse_name = f'{layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
                     for i in range(image_data.shape[0]):
-                        shapes_name = f'TL:Frame{i}:{timelapse_name}'
+                        shapes_name = f'TL_Frame{i}_{timelapse_name}'
                         self.compute_and_check_image_hash(image_data[i], layer_name, shapes_name)
                     self._preprocess(layer_name, image_data)
                     self._on_frame_change()
@@ -1241,7 +1248,8 @@ class OrganoidAnalyzerWidget(QWidget):
         # update drop-down selection box and remove image from dict
         for removed_layer in removed_layers:
             item_id = self.image_layer_selection.findText(removed_layer)
-            self.timelapse_image_layers.pop(removed_layer, None)
+            if removed_layer in self.timelapse_image_layers:
+                self.timelapse_image_layers.remove(removed_layer)
             if item_id >= 0:
                 self.image_layer_selection.removeItem(item_id)
             self.original_images.pop(removed_layer)
@@ -1291,7 +1299,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 self.stored_confidences.pop(removed_name, None)
                 self.stored_diameters.pop(removed_name, None)
 
-                if removed_name.startswith('TL:Frame'):
+                if removed_name.startswith('TL_Frame'):
                     timelapse_name = get_timelapse_name(removed_name)
                     if timelapse_name in self.timelapses:
                         self.timelapses[timelapse_name].remove(removed_name)
@@ -1299,13 +1307,14 @@ class OrganoidAnalyzerWidget(QWidget):
                             if self.cur_timelapse_name == timelapse_name:
                                 self.cur_timelapse_name = None
                             del self.timelapses[timelapse_name]
+                            self.timelapse_segmentations.pop(timelapse_name, None)
                             item_id = self.timelapse_selection.findText(timelapse_name)
                             if item_id >= 0:
                                 self.timelapse_selection.removeItem(item_id)
                     else:
                         show_error(f"Corresponding timelapse '{timelapse_name}' not found.")
 
-                if removed_name==self.cur_shapes_layer.name: 
+                if self.cur_shapes_layer and removed_name==self.cur_shapes_layer.name: 
                     self._update_num_organoids(0)
                     self.cur_shapes_layer = None
                     self._update_cur_shapes_layer_label_and_checkbox()
@@ -1453,7 +1462,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.image_layer_selection = QComboBox()
         if self.image_layer_names is not None:
             for name in self.image_layer_names: 
-                if not name.startswith('Segmentation-') and not name.startswith('TL:'):
+                if not name.startswith('Segmentation-') and not name.startswith('TL_'):
                     self.image_layer_selection.addItem(name)
         #self.image_layer_selection.setItemText(self.image_layer_name)
         self.image_layer_selection.currentIndexChanged.connect(self._on_image_selection_changed)
@@ -1718,7 +1727,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.segmentation_image_layer_selection = QComboBox()
         if self.image_layer_names is not None:
             for name in self.image_layer_names:
-                if not name.startswith('Segmentation-') and not name.startswith('TL:'):
+                if not name.startswith('Segmentation-') and not name.startswith('TL_'):
                     self.segmentation_image_layer_selection.addItem(name)
         self.segmentation_image_layer_selection.currentIndexChanged.connect(self._on_labels_layer_change)
         hbox_img.addWidget(image_label, 2)
@@ -1798,7 +1807,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 if labels_layer_name in self.viewer.layers:
                     self.viewer.layers[labels_layer_name].visible = False
             self.viewer.layers.selection.active = None
-        self.cur_timelapse_name = self.timelapse_selection.currentText()
+        self.cur_timelapse_name = self.timelapse_selection.currentText() if len(self.timelapse_selection.currentText()) > 0 else None
         if self.cur_timelapse_name:
             timelapse_image_name = self.cur_timelapse_name.split('-Labels')[0]
             if timelapse_image_name not in self.timelapse_image_layers or timelapse_image_name not in self.image_layer_names:
@@ -1815,14 +1824,9 @@ class OrganoidAnalyzerWidget(QWidget):
             if not self.cur_timelapse_name in self.timelapses:
                 show_error(f"Timelapse '{self.cur_timelapse_name}' not found.")
                 return
-            for frame in self.timelapses[self.cur_timelapse_name]:
+            for frame in list(self.timelapses[self.cur_timelapse_name]):
                 if frame in self.viewer.layers:
                     self.viewer.layers.remove(frame)
-            self.timelapse_segmentations.pop(self.cur_timelapse_name)
-            item_id = self.timelapse_selection.findText(self.cur_timelapse_name)
-            if item_id >= 0:
-                self.timelapse_selection.removeItem(item_id)
-            self.cur_timelapse_name = None
             show_info("Timelapse deleted successfully.")
         else:
             show_warning("No timelapse selected for deletion.")
@@ -1876,7 +1880,7 @@ class OrganoidAnalyzerWidget(QWidget):
             self.viewer.dims.current_step = (i,)
 
             # Show bbox layer for this frame
-            frame_layer_name = f"TL:Frame{i}:{self.cur_timelapse_name}"
+            frame_layer_name = f"TL_Frame{i}_{self.cur_timelapse_name}"
             if frame_layer_name in self.viewer.layers:
                 self.viewer.layers[frame_layer_name].visible = True
             else:
@@ -1929,7 +1933,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     self.viewer.layers[layer_name].visible = False
             self.viewer.layers.selection.active = None
             # Show only the layer corresponding to the current frame, if it exists
-            frame_layer_name = f"TL:Frame{cur_frame}:{self.cur_timelapse_name}"
+            frame_layer_name = f"TL_Frame{cur_frame}_{self.cur_timelapse_name}"
             if frame_layer_name in self.viewer.layers:
                 self.viewer.layers[frame_layer_name].visible = True
                 self.viewer.layers.selection.active = self.viewer.layers[frame_layer_name]
