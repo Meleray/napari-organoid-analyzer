@@ -264,4 +264,4 @@ def validate_bboxes(bboxes, image_shape):
 
 def get_timelapse_name(name):
     """ Get the name of the timelapse from the napari layer name """
-    return ':'.join(name.split(':')[2:])
+    return '_'.join(name.split('_')[2:])
