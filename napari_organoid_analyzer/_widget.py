@@ -271,7 +271,6 @@ class OrganoidAnalyzerWidget(QWidget):
                 
             # Write the data to the cache file
             json.dump(cache_data, f)
-            show_info(f"Saved detection results to cache file: {cache_file}")
                 
         self.cache_index[image_hash] = cache_file
         self._save_cache_index()
@@ -741,7 +740,6 @@ class OrganoidAnalyzerWidget(QWidget):
 
             if image.shape[2] == 4:
                 image = image[:, :, :3]
-            print(f"Segmenting image {self.label2im[self.label_layer_name]} with shape {image.shape}")
     
             segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
     
@@ -754,7 +752,6 @@ class OrganoidAnalyzerWidget(QWidget):
             tmp_dict = labels_layer.properties.copy()
             tmp_dict.update(features)
             labels_layer.properties = tmp_dict
-            print("Finished segmentation")
     
         self._update_detection_data_tab()
         self.viewer.window._status_bar._toggle_activity_dock(False)
