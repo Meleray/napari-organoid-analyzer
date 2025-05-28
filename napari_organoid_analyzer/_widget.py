@@ -143,10 +143,12 @@ class OrganoidAnalyzerWidget(QWidget):
         self.tab_widget = QTabWidget()
         self.configuration_tab = QWidget()
         self.detection_data_tab = QWidget()
+        self.annotation_tab = QWidget()  # New annotation tab
 
         # Add tabs to the tab widget
         self.tab_widget.addTab(self.configuration_tab, "Configuration")
         self.tab_widget.addTab(self.detection_data_tab, "Detection data")
+        self.tab_widget.addTab(self.annotation_tab, "Annotation") 
         self.tab_widget.setTabEnabled(1, False)  # Initially disable the "Detection data" tab
 
         # Set up the layout for the configuration tab
@@ -192,6 +194,10 @@ class OrganoidAnalyzerWidget(QWidget):
         self.confidence_slider_changed = False
         self.diameter_textbox_changed = False
         self.confidence_textbox_changed = False
+
+        # Set up the layout for the annotation tab
+        self.annotation_tab.setLayout(QVBoxLayout())
+        self.annotation_tab.layout().addWidget(self._setup_annotation_tab_widget())
 
     def handle_progress(self, blocknum, blocksize, totalsize):
         """ When the model is being downloaded, this method is called and th progress of the download
@@ -1267,6 +1273,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 self.guided_mode = True
             else:
                 self.segmentation_image_layer_selection.addItem(layer_name)
+                self.annotation_shape_layer_selector.addItem(layer_name)
                 self.cur_shapes_layer = self.viewer.layers[layer_name]
                 self._update_num_organoids(len(self.cur_shapes_layer.data))
                 self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
@@ -1292,6 +1299,8 @@ class OrganoidAnalyzerWidget(QWidget):
             else:
                 item_id = self.segmentation_image_layer_selection.findText(removed_name)
                 self.segmentation_image_layer_selection.removeItem(item_id)
+                item_id = self.annotation_shape_layer_selector.findText(removed_name)
+                self.annotation_shape_layer_selector.removeItem(item_id)
                 self.label2im.pop(removed_name, None)
                 self.stored_confidences.pop(removed_name, None)
                 self.stored_diameters.pop(removed_name, None)
@@ -1968,7 +1977,9 @@ class OrganoidAnalyzerWidget(QWidget):
         for name in self._get_layer_names(layer_type=layers.Image):
             self.image_layer_selection.addItem(name)
 
-        # TODO: Handle layer name change 
+        self.annotation_shape_layer_selector.clear()
+        for name in self._get_layer_names(layer_type=layers.Shapes):
+            self.annotation_shape_layer_selector.addItem(name)
 
     def _on_shape_selected(self, event):
         """
@@ -2024,3 +2035,60 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info(f"Detection data exported successfully to {file_path}.")
         else:
             show_warning("Export canceled.")
+
+    def _on_create_annotated_property(self):
+        """
+        Called when user clicks the button to create an annotated property in the "Annotation" tab.
+        """
+        shape_layer_name = self.annotation_shape_layer_selector.currentText()
+        annotation_type = self.annotation_tool_selector.currentText() # "Text" or "Ruler"
+
+        if not shape_layer_name or not annotation_type:
+            show_warning("Please select a shape layer and an annotation tool type.")
+            return
+        
+        if shape_layer_name not in self.viewer.layers:
+            show_error(f"Shape layer '{shape_layer_name}' not found.")
+            return
+        
+        # TODO: Implement annotation tool logic
+
+    def _setup_annotation_tab_widget(self):
+        """
+        Sets up the Annotation tab with selectors and a button.
+        """
+        widget = QWidget()
+        vbox = QVBoxLayout()
+        
+        # Selector for current shape layers
+        hbox1 = QHBoxLayout()
+        shape_layer_label = QLabel("Shapes layer:", self)
+        self.annotation_shape_layer_selector = QComboBox()
+        for name in self._get_layer_names(layer_type=layers.Shapes):
+            self.annotation_shape_layer_selector.addItem(name)
+        hbox1.addWidget(shape_layer_label)
+        hbox1.addWidget(self.annotation_shape_layer_selector)
+        vbox.addLayout(hbox1)
+
+        vbox.addSpacing(10)
+
+        # Selector for annotation tool type
+        hbox2 = QHBoxLayout()
+        tool_type_label = QLabel("Annotation tool:", self)
+        self.annotation_tool_selector = QComboBox()
+        self.annotation_tool_selector.addItems(["Text", "Ruler"])
+        hbox2.addWidget(tool_type_label)
+        hbox2.addWidget(self.annotation_tool_selector)
+        vbox.addLayout(hbox2)
+
+        vbox.addSpacing(10)
+
+        # Button to create annotated property
+        self.create_annotated_property_btn = QPushButton("Create annotated property")
+        self.create_annotated_property_btn.clicked.connect(self._on_create_annotated_property)
+        vbox.addWidget(self.create_annotated_property_btn)
+
+        vbox.addStretch(1)
+
+        widget.setLayout(vbox)
+        return widget
