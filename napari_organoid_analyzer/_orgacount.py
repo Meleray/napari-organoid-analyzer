@@ -11,6 +11,7 @@ from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
 from napari_organoid_analyzer._utils import set_posix_windows
+import matplotlib.pyplot as plt
 import cv2
 import sys
 import logging
@@ -50,8 +51,6 @@ class OrganoiDL():
         self.handle_progress = handle_progress
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model_name = None
-        self.cur_confidence = 0.05
-        self.cur_min_diam = 30
         self.model = None
         self.img_scale = [0., 0.]
         self.pred_bboxes = {}
@@ -109,6 +108,7 @@ class OrganoiDL():
                        rescale_factor,
                        prepadded_height,
                        prepadded_width,
+                       crop_offset,
                        bboxes_list=[],
                        scores_list=[]):
         ''' Runs sliding window inference and returns predicting bounding boxes and confidence scores for each box.
@@ -126,6 +126,8 @@ class OrganoiDL():
             The image height before padding was applied
         prepadded_width: int
             The image width before padding was applied
+        crop_offset: list of int
+            The [x_min, y_min] offset of the current crop in the original image.
         bboxes_list: list of
             The
         scores_list: list of
@@ -164,16 +166,14 @@ class OrganoiDL():
                     print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
                     for bbox_id in range(len(bboxes)):
                         y1, x1, y2, x2 = bboxes[bbox_id] # predictions from model will be in form x1,y1,x2,y2
-                        x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor')
-                        x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor')
-                        y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor')
-                        y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor')
+                        x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                        x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                        y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
+                        y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
                         bboxes_list.append(torch.Tensor([x1_real, y1_real, x2_real, y2_real]))
                         scores_list.append(scores[bbox_id])
         print('Number of predictions:', len(bboxes_list))
         print('Number of scores:', len(scores_list))
-        print(bboxes_list[0])
-        print(scores_list[0])
         return bboxes_list, scores_list
 
     def run(self, 
@@ -181,7 +181,8 @@ class OrganoiDL():
             shapes_name,
             window_sizes,
             downsampling_sizes,   
-            window_overlap):
+            window_overlap, 
+            crops):
         ''' Runs inference for an image at multiple window sizes and downsampling rates using sliding window ineference.
         The results are filtered using the NMS algorithm and are then stored to dicts.
         Inputs
@@ -196,6 +197,8 @@ class OrganoiDL():
             The downsampling factor of the image, list size must match window_size
         window_overlap: float
             The window overlap for the sliding window inference.
+        crops: Numpy array of size [B, 4]
+            Bounding boxes for areas of interest in the image. If not None, the sliding window will run only on these areas.
         ''' 
         bboxes = []
         scores = []
@@ -204,22 +207,31 @@ class OrganoiDL():
             # compute the step for the sliding window, based on window overlap
             rescale_factor = 1 / downsampling
             # window size after rescaling
-            window_size = round(window_size * rescale_factor)
-            step = round(window_size * window_overlap)
-            # prepare image for model - norm, tensor, etc.
-            ready_img, prepadded_height, prepadded_width  = prepare_img(img,
-                                                                        step,
-                                                                        window_size,
-                                                                        rescale_factor)
-            # and run sliding window over whole image
-            bboxes, scores = self.sliding_window(ready_img,
-                                                 step,
-                                                 window_size,
-                                                 rescale_factor,
-                                                 prepadded_height,
-                                                 prepadded_width,
-                                                 bboxes,
-                                                 scores)
+            current_window_size = round(window_size * rescale_factor) # Use a different variable name
+            step = round(current_window_size * window_overlap)
+
+            for crop_coords in crops:
+                x1, y1, x2, y2 = list(map(int, crop_coords))
+
+                cropped_img = img[x1:x2, y1:y2]
+
+                # prepare image for model - norm, tensor, etc.
+                ready_img, prepadded_height, prepadded_width = prepare_img(cropped_img,
+                                                                            step,
+                                                                            current_window_size,
+                                                                            rescale_factor)
+                crop_offset_for_sliding_window = [x1, y1]
+
+
+                bboxes, scores = self.sliding_window(ready_img,
+                                                     step,
+                                                     current_window_size, # use the rescaled window size
+                                                     rescale_factor,
+                                                     prepadded_height,
+                                                     prepadded_width,
+                                                     crop_offset_for_sliding_window,
+                                                     bboxes,
+                                                     scores)
         # stack results
         bboxes = torch.stack(bboxes)
         scores = torch.Tensor(scores)
@@ -261,6 +273,8 @@ class OrganoiDL():
                 multimask_output=False
             )
             pred_mask = np.squeeze(pred_mask.cpu().numpy().astype(np.uint8))
+            if len(pred_mask.shape) == 2:
+                pred_mask = np.expand_dims(pred_mask, axis=0)
 
         self.pred_masks[mask_name] = pred_mask
         features = []
@@ -299,29 +313,27 @@ class OrganoiDL():
     def apply_params(self, shapes_name, confidence, min_diameter_um):
         """ After results have been stored in dict this function will filter the dicts based on the confidence
         and min_diameter_um thresholds for the given results defined by shape_name and return the filtered dicts. """
-        self.cur_confidence = confidence
-        self.cur_min_diam = min_diameter_um
-        pred_bboxes, pred_scores, pred_ids = self._apply_confidence_thresh(shapes_name)
+        pred_bboxes, pred_scores, pred_ids = self._apply_confidence_thresh(shapes_name, confidence)
         if pred_bboxes.size(0)!=0:
-            pred_bboxes, pred_scores, pred_ids = self._filter_small_organoids(pred_bboxes, pred_scores, pred_ids)
+            pred_bboxes, pred_scores, pred_ids = self._filter_small_organoids(pred_bboxes, pred_scores, pred_ids, min_diameter_um)
         pred_bboxes = convert_boxes_to_napari_view(pred_bboxes)
         return pred_bboxes, pred_scores, pred_ids
 
-    def _apply_confidence_thresh(self, shapes_name):
+    def _apply_confidence_thresh(self, shapes_name, confidence):
         """ Filters out results of shapes_name based on the current confidence threshold. """
         if shapes_name not in self.pred_bboxes.keys(): return torch.empty((0)), torch.empty((0)), []
-        keep = (self.pred_scores[shapes_name]>self.cur_confidence).nonzero(as_tuple=True)[0]
+        keep = (self.pred_scores[shapes_name]>confidence).nonzero(as_tuple=True)[0]
         if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
         result_bboxes = self.pred_bboxes[shapes_name][keep]
         result_scores = self.pred_scores[shapes_name][keep]
         result_ids = [self.pred_ids[shapes_name][int(i)] for i in keep.tolist()]
         return result_bboxes, result_scores, result_ids
     
-    def _filter_small_organoids(self, pred_bboxes, pred_scores, pred_ids):
+    def _filter_small_organoids(self, pred_bboxes, pred_scores, pred_ids, min_diameter):
         """ Filters out small result boxes of shapes_name based on the current min diameter size. """
         if len(pred_bboxes)==0: return torch.empty((0)), torch.empty((0)), []
-        min_diameter_x = self.cur_min_diam / self.img_scale[0]
-        min_diameter_y = self.cur_min_diam / self.img_scale[1]
+        min_diameter_x = min_diameter / self.img_scale[0]
+        min_diameter_y = min_diameter / self.img_scale[1]
         keep = []
         for idx in range(len(pred_bboxes)):
             dx, dy = get_diams(pred_bboxes[idx])
@@ -332,7 +344,7 @@ class OrganoiDL():
         pred_ids = [pred_ids[i] for i in keep]
         return pred_bboxes, pred_scores, pred_ids
 
-    def update_bboxes_scores(self, shapes_name, new_bboxes, new_scores, new_ids):
+    def update_bboxes_scores(self, shapes_name, new_bboxes, new_scores, new_ids, old_confidence, old_min_diameter):
         ''' Updated the results dicts, self.pred_bboxes, self.pred_scores and self.pred_ids with new results.
         If the shapes name doesn't exist as a key in the dicts the results are added with the new key. If the
         key exists then new_bboxes, new_scores and new_ids are compared to the class result dicts and the dicts 
@@ -350,8 +362,8 @@ class OrganoiDL():
         elif len(new_ids)==0: return
 
         else:
-            min_diameter_x = self.cur_min_diam / self.img_scale[0]
-            min_diameter_y = self.cur_min_diam / self.img_scale[1]
+            min_diameter_x = old_min_diameter / self.img_scale[0]
+            min_diameter_y = old_min_diameter / self.img_scale[1]
             # find ids that are not in self.pred_ids but are in new_ids
             added_box_ids = list(set(new_ids).difference(self.pred_ids[shapes_name]))
             if len(added_box_ids) > 0:
@@ -369,7 +381,7 @@ class OrganoiDL():
                 remove_ids = []
                 for idx in potential_removed_ids:
                     dx, dy  = get_diams(self.pred_bboxes[shapes_name][idx])
-                    if self.pred_scores[shapes_name][idx] > self.cur_confidence and dx > min_diameter_x and dy > min_diameter_y:
+                    if self.pred_scores[shapes_name][idx] > old_confidence and dx > min_diameter_x and dy > min_diameter_y:
                         remove_ids.append(idx)
                 # and remove them
                 for idx in reversed(remove_ids):
