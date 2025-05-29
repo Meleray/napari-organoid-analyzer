@@ -176,6 +176,20 @@ class OrganoidAnalyzerWidget(QWidget):
         self.diameter_slider_changed = False 
         self.confidence_slider_changed = False
 
+        self.load_cached_settings()
+
+    def load_cached_settings(self):
+        self.session_vars = dict(
+            export_folder = None
+        )
+        if (settings.SETTINGS_DIR / 'session_vars.json').exists():
+            with open(settings.SETTINGS_DIR / 'session_vars.json', 'r') as f:
+                self.session_vars.update(json.load(f))
+    
+    def set_session_var(self, name, value):
+        self.session_vars.update({name: value})
+        utils.write_to_json(settings.SETTINGS_DIR / 'session_vars.json', self.session_vars)
+
     def handle_progress(self, blocknum, blocksize, totalsize):
         """ When the model is being downloaded, this method is called and th progress of the download
         is calculated and displayed on the progress bar. This function was re-implemented from:
@@ -319,6 +333,9 @@ class OrganoidAnalyzerWidget(QWidget):
         self._update_num_organoids(len(bboxes))
         
         self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
+        
+        # Most likely action after loading cached detections is to select/delete/change some of them.
+        self.viewer.layers[labels_layer_name].mode = 'select'
         
         return True
 
@@ -482,8 +499,9 @@ class OrganoidAnalyzerWidget(QWidget):
                                                                shape_type='rectangle',
                                                                edge_width=12) # warning generated here
                             
-            # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
-            self.viewer.layers[labels_layer_name].current_edge_width = 1
+        # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
+        self.viewer.layers[labels_layer_name].current_edge_width = 1
+        self.viewer.layers[labels_layer_name].mode = 'select'
 
     def _check_sam(self):
         # check if SAM model exists locally and if not ask user if it's ok to download

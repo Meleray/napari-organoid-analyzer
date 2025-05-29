@@ -72,6 +72,7 @@ class ExportDialog(QDialog):
         path_layout = QHBoxLayout()
         path_layout.addWidget(QLabel("Export to folder:"))
         self.path_input = QLineEdit()
+        self.path_input.setText(parent.session_vars['export_folder'])
         path_layout.addWidget(self.path_input, 1)
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_folder)
@@ -123,6 +124,7 @@ class ExportDialog(QDialog):
         
         feature_layout.addStretch()
         self.feature_selection_widget.setLayout(feature_layout)
+        self.feature_selection_widget.setVisible(True)
         bottom_layout.addWidget(self.feature_selection_widget)
         layout.addLayout(bottom_layout)
         
@@ -139,9 +141,10 @@ class ExportDialog(QDialog):
         self.setLayout(layout)
     
     def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", self.parent().session_vars['export_folder'])
         if folder:
             self.path_input.setText(folder)
+            self.parent().set_session_var('export_folder', folder)
     
     def _toggle_feature_selection(self, state):
         self.feature_selection_widget.setVisible(state == Qt.Checked)
