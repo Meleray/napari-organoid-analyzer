@@ -6,8 +6,8 @@ from napari_organoid_analyzer import settings
 
 #update_version_in_mmdet_init_file('mmdet', '2.2.0', '2.3.0')
 import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import torch
 import mmdet
