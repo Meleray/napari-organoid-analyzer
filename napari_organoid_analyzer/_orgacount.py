@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import cv2
 import sys
 import logging
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 class OrganoiDL():
     '''
