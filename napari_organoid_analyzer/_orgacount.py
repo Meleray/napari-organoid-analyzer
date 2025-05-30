@@ -5,6 +5,10 @@ from napari_organoid_analyzer._utils import *
 from napari_organoid_analyzer import settings
 
 #update_version_in_mmdet_init_file('mmdet', '2.2.0', '2.3.0')
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import mmdet
 from mmdet.apis import DetInferencer
@@ -13,7 +17,6 @@ from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import Detection
 from napari_organoid_analyzer._utils import set_posix_windows
 import matplotlib.pyplot as plt
 import cv2
-import sys
 import logging
 
 class OrganoiDL():
