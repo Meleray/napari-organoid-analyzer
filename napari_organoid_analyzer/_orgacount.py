@@ -5,10 +5,6 @@ from napari_organoid_analyzer._utils import *
 from napari_organoid_analyzer import settings
 
 #update_version_in_mmdet_init_file('mmdet', '2.2.0', '2.3.0')
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-
 import torch
 import mmdet
 from mmdet.apis import DetInferencer
