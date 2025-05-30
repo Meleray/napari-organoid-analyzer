@@ -1,8 +1,5 @@
 from urllib.request import urlretrieve
 from napari.utils import progress
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 from napari_organoid_analyzer._utils import *
 from napari_organoid_analyzer import settings
@@ -16,7 +13,10 @@ from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import Detection
 from napari_organoid_analyzer._utils import set_posix_windows
 import matplotlib.pyplot as plt
 import cv2
+import sys
 import logging
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
+
 class OrganoiDL():
     '''
     The back-end of the organoid analyzer widget
