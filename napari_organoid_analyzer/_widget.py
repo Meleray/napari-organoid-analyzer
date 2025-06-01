@@ -737,8 +737,9 @@ class OrganoidAnalyzerWidget(QWidget):
                 image = self.viewer.layers[self.label2im[self.label_layer_name]].data[frame_idx]
             else:
                 image = self.viewer.layers[self.label2im[self.label_layer_name]].data
-
-            if image.shape[2] == 4:
+            if image.ndim == 2:
+                image = np.stack([image, image, image], axis=-1)
+            elif image.ndim == 3 and image.shape[2] == 4:
                 image = image[:, :, :3]
     
             segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
