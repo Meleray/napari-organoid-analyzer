@@ -11,6 +11,7 @@ import csv
 from skimage.transform import rescale
 from skimage.color import gray2rgb
 import hashlib
+import cv2
 
 import torch
 from torchvision.ops import nms
@@ -18,6 +19,36 @@ from torchvision.ops import nms
 from napari_organoid_analyzer import settings
 
 from ctypes.wintypes import MAX_PATH
+
+
+def normalize(img, grayscale=True, correct_bg=True, fix_median=True):
+    """Normalizes and corrects the background of a single image and converts it to 3-channel grayscale.
+    """
+    if img.ndim==2:
+        img = np.stack([img, img, img], axis=2)
+    elif img.ndim==3:
+        if img.shape[2]==1:
+            img = np.concat([img, img, img], axis=2)
+        elif img.shape[2]==4:
+            img = img[:, :, :3]
+        elif img.shape[2]==3:
+            pass
+        else:
+            raise RuntimeError(img.shape)
+        if grayscale:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            img = np.stack([img, img, img], axis=2)
+    else:
+        raise RuntimeError(img.shape)
+    
+    # Correct background
+    if correct_bg:
+        pass
+        # bg = ...
+
+    if fix_median:
+        pass
+    return img
 
 
 @contextmanager

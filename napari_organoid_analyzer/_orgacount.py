@@ -1,7 +1,9 @@
+import os
 from urllib.request import urlretrieve
+import numpy as np
 from napari.utils import progress
 
-from napari_organoid_analyzer._utils import *
+from napari_organoid_analyzer import _utils
 from napari_organoid_analyzer import settings
 
 #update_version_in_mmdet_init_file('mmdet', '2.2.0', '2.3.0')
@@ -66,14 +68,14 @@ class OrganoiDL():
     
     def init_sam_predictor(self):
         if self.sam_predictor is None:
-            sam_model = build_sam_vit_l(checkpoint=join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
+            sam_model = build_sam_vit_l(checkpoint=_utils.join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
             self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
 
     def set_model(self, model_name):
         ''' Initialise  model instance and load model checkpoint and send to device. '''
         self.init_sam_predictor()
         self.model_name = model_name
-        model_checkpoint = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
+        model_checkpoint = _utils.join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
         if model_name == 'SAMOS':
             with set_posix_windows():
                 checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
@@ -86,7 +88,7 @@ class OrganoiDL():
             self.model.to(self.device)
         else:
             mmdet_path = os.path.dirname(mmdet.__file__)
-            config_dst = join_paths(mmdet_path, str(settings.CONFIGS[model_name]["destination"]))
+            config_dst = _utils.join_paths(mmdet_path, str(settings.CONFIGS[model_name]["destination"]))
             # download the corresponding config if it doesn't exist already
             if not os.path.exists(config_dst):
                 urlretrieve(settings.CONFIGS[model_name]["source"], config_dst, self.handle_progress)
@@ -97,7 +99,7 @@ class OrganoiDL():
         # specify the url of the model which is to be downloaded
         down_url = settings.MODELS[model_name]["source"]
         # specify save location where the file is to be saved
-        save_loc = join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
+        save_loc = _utils.join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
         # downloading using urllib
         urlretrieve(down_url, save_loc, self.handle_progress)
 
@@ -216,7 +218,7 @@ class OrganoiDL():
                 cropped_img = img[x1:x2, y1:y2]
 
                 # prepare image for model - norm, tensor, etc.
-                ready_img, prepadded_height, prepadded_width = prepare_img(cropped_img,
+                ready_img, prepadded_height, prepadded_width = _utils.prepare_img(cropped_img,
                                                                             step,
                                                                             current_window_size,
                                                                             rescale_factor)
@@ -236,7 +238,7 @@ class OrganoiDL():
         bboxes = torch.stack(bboxes)
         scores = torch.Tensor(scores)
         # apply NMS to remove overlaping boxes
-        bboxes, pred_scores = apply_nms(bboxes, scores)
+        bboxes, pred_scores = _utils.apply_nms(bboxes, scores)
         self.pred_bboxes[shapes_name] = bboxes
         self.pred_scores[shapes_name] = pred_scores
         num_predictions = bboxes.size(0)
@@ -258,6 +260,7 @@ class OrganoiDL():
         if bboxes.shape[0] == 0:
             pred_mask = np.array([])
         else:
+            img = _utils.normalize(img)
             self.sam_predictor.set_image(img)
             bboxes = torch.stack((
                 bboxes[:, 1],
@@ -316,7 +319,7 @@ class OrganoiDL():
         pred_bboxes, pred_scores, pred_ids = self._apply_confidence_thresh(shapes_name, confidence)
         if pred_bboxes.size(0)!=0:
             pred_bboxes, pred_scores, pred_ids = self._filter_small_organoids(pred_bboxes, pred_scores, pred_ids, min_diameter_um)
-        pred_bboxes = convert_boxes_to_napari_view(pred_bboxes)
+        pred_bboxes = _utils.convert_boxes_to_napari_view(pred_bboxes)
         return pred_bboxes, pred_scores, pred_ids
 
     def _apply_confidence_thresh(self, shapes_name, confidence):
@@ -336,7 +339,7 @@ class OrganoiDL():
         min_diameter_y = min_diameter / self.img_scale[1]
         keep = []
         for idx in range(len(pred_bboxes)):
-            dx, dy = get_diams(pred_bboxes[idx])
+            dx, dy = _utils.get_diams(pred_bboxes[idx])
             if (dx >= min_diameter_x and dy >= min_diameter_y) or pred_scores[idx] == 1: keep.append(idx)
         if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
         pred_bboxes = pred_bboxes[keep]
@@ -349,7 +352,7 @@ class OrganoiDL():
         If the shapes name doesn't exist as a key in the dicts the results are added with the new key. If the
         key exists then new_bboxes, new_scores and new_ids are compared to the class result dicts and the dicts 
         are updated, either by adding some box (user added box) or removing some box (user deleted a prediction).'''
-        new_bboxes = convert_boxes_from_napari_view(new_bboxes)
+        new_bboxes = _utils.convert_boxes_from_napari_view(new_bboxes)
         new_scores =  torch.Tensor(list(new_scores))
         new_ids = list(new_ids)
         # if run hasn't been run
@@ -380,7 +383,7 @@ class OrganoiDL():
                 potential_removed_ids = [self.pred_ids[shapes_name].index(box_id) for box_id in potential_removed_box_ids]
                 remove_ids = []
                 for idx in potential_removed_ids:
-                    dx, dy  = get_diams(self.pred_bboxes[shapes_name][idx])
+                    dx, dy  = _utils.get_diams(self.pred_bboxes[shapes_name][idx])
                     if self.pred_scores[shapes_name][idx] > old_confidence and dx > min_diameter_x and dy > min_diameter_y:
                         remove_ids.append(idx)
                 # and remove them
