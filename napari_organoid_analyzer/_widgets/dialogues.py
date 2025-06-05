@@ -1,4 +1,4 @@
-from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QCheckBox, QLineEdit, QFileDialog
+from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QCheckBox, QLineEdit, QFileDialog, QComboBox, QStackedLayout
 from qtpy.QtCore import Qt
 from napari_organoid_analyzer import settings
 
@@ -56,6 +56,111 @@ class ConfirmSamUpload(ConfirmUpload):
                 "if you click cancel. WARNING: The model size is 1.2 GB!")
         self.layout().itemAt(0).widget().setText(text)
 
+
+class SignalDialog(QDialog):
+    """
+    Dialog for adding or selecting signal for image
+    """
+    def __init__(self, parent, image_layer_names):
+        super().__init__(parent)
+        self.setWindowTitle("Add signal layer")
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout()
+
+        stacked_layout = QStackedLayout()
+        signal_image_layout = QHBoxLayout()
+        signal_image_layout.addWidget(QLabel("Selected signal layer:"), 2)
+        self.signal_image_selector = QComboBox()
+        self.signal_image_selector.addItems(image_layer_names)
+        signal_image_layout.addWidget(self.signal_image_selector, 4)
+        signal_image_widget = QWidget()
+        signal_image_widget.setLayout(signal_image_layout)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("Selected signal file:"), 2)
+        self.path_input = QLineEdit()
+        path_layout.addWidget(self.path_input, 3)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._browse_file)
+        path_layout.addWidget(browse_button, 1)
+        path_widget = QWidget()
+        path_widget.setLayout(path_layout)
+
+        stacked_layout.addWidget(signal_image_widget)
+        stacked_layout.addWidget(path_widget)
+
+        signal_target_layout = QHBoxLayout()
+        signal_target_layout.addWidget(QLabel("Target image:"), 2)
+        self.image_layer_selector = QComboBox()
+        self.image_layer_selector.addItems(image_layer_names)
+        signal_target_layout.addWidget(self.image_layer_selector, 4)
+        layout.addLayout(signal_target_layout)
+
+        upload_type_layout = QHBoxLayout()
+        upload_type_layout.addWidget(QLabel("Source type:"), 2)
+        self.upload_type_selector = QComboBox()
+        self.upload_type_selector.addItems(['Select existing image', 'Upload new image'])
+        self.upload_type_selector.currentIndexChanged.connect(stacked_layout.setCurrentIndex)
+        self.upload_type_selector.setCurrentIndex(0)
+        self.upload_type_selector.setCurrentText('Select existing image')
+        upload_type_layout.addWidget(self.upload_type_selector, 4)
+        layout.addLayout(upload_type_layout)
+        layout.addLayout(stacked_layout)
+
+        button_layout = QHBoxLayout()
+        export_button = QPushButton("Import")
+        export_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(export_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+
+    def _browse_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, 'Image file')
+        if file_path:
+            self.path_input.setText(file_path)
+
+    def get_target(self):
+        return self.image_layer_selector.currentText()
+    
+    def get_source(self):
+        if self.upload_type_selector.currentIndex() == 0:
+            return True, self.signal_image_selector.currentText()
+        else:
+            return False, self.path_input.text()
+        
+class SignalChannelDialog(QDialog):
+    """
+    Dialog for selecting signal channel
+    """
+    def __init__(self, parent, channel_num):
+        super().__init__(parent)
+        layout = QVBoxLayout()
+        text = QLabel("Multiple channels detected in the signal. Please select exact channel idx, containing the signal. Note: For RGB, 0 - R, 1 - G, 2 - B")
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.channel_selector = QComboBox()
+        for i in range(channel_num):
+            self.channel_selector.addItem(str(i))
+        layout.addWidget(self.channel_selector)
+        button_layout = QHBoxLayout()
+        export_button = QPushButton("Confirm")
+        export_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(export_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def get_channel_idx(self):
+        return int(self.channel_selector.currentText())
+
+
 class ExportDialog(QDialog):
     """
     Dialog for selecting export options
@@ -69,6 +174,7 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout()
         
         # Export path selection
+        # TODO: put it in separate class to avoid copy/paste
         path_layout = QHBoxLayout()
         path_layout.addWidget(QLabel("Export to folder:"))
         self.path_input = QLineEdit()

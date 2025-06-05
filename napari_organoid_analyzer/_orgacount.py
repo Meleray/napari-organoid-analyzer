@@ -56,6 +56,7 @@ class OrganoiDL():
         self.pred_bboxes = {}
         self.pred_scores = {}
         self.pred_masks = {}
+        self.signal_masks = {}
         self.pred_ids = {}
         self.next_id = {}
         self.sam_predictor = None
@@ -243,28 +244,31 @@ class OrganoiDL():
         self.pred_ids[shapes_name] = [int(i+1) for i in range(num_predictions)]
         self.next_id[shapes_name] = num_predictions+1
 
-    def run_segmentation(self, img, mask_name, bboxes):
+    def run_segmentation(self, img, mask_name, bboxes, signal_field=None):
         """
         Runs segmentation pipeline for selected image, based on previously detected bboxes
         Inputs
         ----------
-        img: Numpy array of size [H, W]
+        img: Numpy array of size [H, W, 3]
             The input image
         mask_name: str
             Name of mask
         bbooxes: Numpy array of size [N, 4]
             Array of all predicted bboxes in xyxy format
+        signal_field: numpy array of size [H, W, 3]
+            Optional signal field for the image
         """
+        signal_mask = None
         if bboxes.shape[0] == 0:
             pred_mask = np.array([])
         else:
-            self.sam_predictor.set_image(img)
             bboxes = torch.stack((
                 bboxes[:, 1],
                 bboxes[:, 0],
                 bboxes[:, 3],
                 bboxes[:, 2]
             ), dim=1).to(self.device)
+            self.sam_predictor.set_image(img)
             bboxes = self.sam_predictor.transform.apply_boxes_torch(bboxes, img.shape[:2])
             pred_mask, _, _ = self.sam_predictor.predict_torch(
                 point_coords=None,
@@ -276,14 +280,37 @@ class OrganoiDL():
             if len(pred_mask.shape) == 2:
                 pred_mask = np.expand_dims(pred_mask, axis=0)
 
+            if signal_field is not None:
+                self.sam_predictor.set_image(signal_field)
+                signal_mask, _, _ = self.sam_predictor.predict_torch(
+                    point_coords=None,
+                    point_labels=None,
+                    boxes=bboxes,
+                    multimask_output=False
+                )
+                signal_mask = np.squeeze(signal_mask.cpu().numpy().astype(np.uint8))
+                if len(signal_mask.shape) == 2:
+                    signal_mask = np.expand_dims(pred_mask, axis=0)
+
+            
+
         self.pred_masks[mask_name] = pred_mask
+        if signal_mask is not None:
+            self.signal_masks[mask_name] = signal_mask
+            assert len(pred_mask) == len(signal_mask)
         features = []
-        for idx, mask in enumerate(pred_mask):
-            features.append(self._compute_features(mask, idx))
+        for idx in range(len(pred_mask)):
+            features.append(self._compute_features(
+                pred_mask[idx], 
+                idx, 
+                signal_mask[idx] if signal_mask is not None else None, 
+                signal_field[:, :, 0] if signal_field is not None else None
+            ))
+        print(features)
         features = {key: [feature[key] for feature in features] for key in features[0]}
-        return pred_mask, features
+        return pred_mask, features, signal_mask
     
-    def _compute_features(self, mask, idx):
+    def _compute_features(self, mask, idx, signal_mask=None, signal_field=None):
         """
         Computes mask-based features for detected organoids
         
@@ -291,6 +318,8 @@ class OrganoiDL():
         ----------
         mask: Numpy array of size [H, W]
             The mask of a single organoid detection
+        signal_mask: Numpy array of size [H, W]
+            Mask for segmented signal field
         """
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -303,11 +332,23 @@ class OrganoiDL():
             roundness = (4 * np.pi * area[id_selected]) / (perimeter ** 2)
         else:
             roundness = 0
-        return {
+        features = {
             'Area': area[id_selected],
             'Perimeter': perimeter,
             'Roundness': roundness
         }
+        if signal_mask is not None and signal_field is not None:
+            signal_contours, _ = cv2.findContours(signal_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            total_signal_area = sum([cv2.contourArea(contour) for contour in signal_contours])
+            signal_total_intensity = np.sum(signal_mask * signal_field) / 255.0
+            signal_mean_intensity = signal_total_intensity / total_signal_area
+            features.update({
+                "Signal area": total_signal_area,
+                "Signal mean intensity": signal_mean_intensity,
+                "Signal total intensity": signal_total_intensity,
+                "Signal components": len(signal_contours)
+            })
+        return features
 
 
     def apply_params(self, shapes_name, confidence, min_diameter_um):
