@@ -1,6 +1,8 @@
 from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QCheckBox, QLineEdit, QFileDialog, QComboBox, QStackedLayout
 from qtpy.QtCore import Qt
 from napari_organoid_analyzer import settings
+from datetime import datetime
+
 
 class ConfirmUpload(QDialog):
     '''
@@ -91,21 +93,29 @@ class SignalDialog(QDialog):
         stacked_layout.addWidget(path_widget)
 
         signal_target_layout = QHBoxLayout()
-        signal_target_layout.addWidget(QLabel("Target image:"), 2)
+        signal_target_layout.addWidget(QLabel("Image layer:"), 2)
         self.image_layer_selector = QComboBox()
         self.image_layer_selector.addItems(image_layer_names)
         signal_target_layout.addWidget(self.image_layer_selector, 4)
         layout.addLayout(signal_target_layout)
 
         upload_type_layout = QHBoxLayout()
-        upload_type_layout.addWidget(QLabel("Source type:"), 2)
+        upload_type_layout.addWidget(QLabel("Signal source:"), 2)
         self.upload_type_selector = QComboBox()
-        self.upload_type_selector.addItems(['Select existing image', 'Upload new image'])
+        self.upload_type_selector.addItems(['Select existing layer', 'Upload signal image'])
         self.upload_type_selector.currentIndexChanged.connect(stacked_layout.setCurrentIndex)
         self.upload_type_selector.setCurrentIndex(0)
-        self.upload_type_selector.setCurrentText('Select existing image')
+        self.upload_type_selector.setCurrentText('Select existing layer')
         upload_type_layout.addWidget(self.upload_type_selector, 4)
         layout.addLayout(upload_type_layout)
+
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(QLabel("Signal name: "), 2)
+        self.name_textbox = QLineEdit()
+        self.name_textbox.setText(f"Unnamed_Signal_{datetime.strftime(datetime.now(), '%H_%M_%S')}")
+        name_layout.addWidget(self.name_textbox, 4)
+        layout.addLayout(name_layout)
+
         layout.addLayout(stacked_layout)
 
         button_layout = QHBoxLayout()
@@ -133,14 +143,20 @@ class SignalDialog(QDialog):
         else:
             return False, self.path_input.text()
         
+    def get_name(self):
+        if len(self.name_textbox.text()) > 0:
+            return self.name_textbox.text()
+        else:
+            return f"Unnamed_Signal_{datetime.strftime(datetime.now(), '%H_%M_%S')}"
+        
 class SignalChannelDialog(QDialog):
     """
     Dialog for selecting signal channel
     """
-    def __init__(self, parent, channel_num):
+    def __init__(self, parent, channel_num, signal_name):
         super().__init__(parent)
         layout = QVBoxLayout()
-        text = QLabel("Multiple channels detected in the signal. Please select exact channel idx, containing the signal. Note: For RGB, 0 - R, 1 - G, 2 - B")
+        text = QLabel(f"Multiple channels detected in the signal {signal_name}. Please select exact channel idx, containing the signal. Note: For RGB, 0 - R, 1 - G, 2 - B")
         text.setWordWrap(True)
         layout.addWidget(text)
         self.channel_selector = QComboBox()

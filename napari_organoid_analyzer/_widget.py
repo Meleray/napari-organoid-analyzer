@@ -25,7 +25,29 @@ from napari_organoid_analyzer._utils import (
 import numpy as np
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QApplication, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QComboBox, QPushButton, QLineEdit, QProgressBar, QSlider, QTabWidget, QTreeWidget, QTreeWidgetItem, QCheckBox
+from qtpy.QtWidgets import (
+    QHeaderView, 
+    QAbstractItemView,
+    QTableWidgetItem,
+    QWidget, 
+    QVBoxLayout, 
+    QApplication, 
+    QDialog, 
+    QFileDialog, 
+    QGroupBox, 
+    QHBoxLayout, 
+    QLabel, 
+    QComboBox, 
+    QPushButton, 
+    QLineEdit, 
+    QProgressBar, 
+    QSlider, 
+    QTabWidget, 
+    QTreeWidget, 
+    QTreeWidgetItem, 
+    QCheckBox, 
+    QTableWidget
+)
 
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
@@ -674,32 +696,32 @@ class OrganoidAnalyzerWidget(QWidget):
             return
         
         image_data = self.viewer.layers[image_name].data
-        
+
+        merged_signal_data = {}
         if image_name in self.im2signal:
-            signal_name = self.im2signal[image_name]
-            if not signal_name in self.viewer.layers:
-                show_error(f"Signal name {signal_name} not found in viewer")
-                return
-            signal_data = self.viewer.layers[signal_name].data
-            image_shape = image_data.shape
-            signal_shape = signal_data.shape
-            if not (
-                (len(signal_shape) == len(image_shape) - 1 and signal_shape == image_shape[:-1]) or 
-                (len(signal_shape) == len(image_shape) and signal_shape[:-1] == image_shape[:-1]) or
-                (len(signal_shape) == 3 and len(image_shape) == 2 and signal_shape[:-1] == image_shape)
-            ):
-                show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Plase select another signal")
-                return
-            if len(signal_shape) >= len(image_shape):
-                channel_dialog = SignalChannelDialog(self, signal_shape[-1])
-                if channel_dialog.exec_() != QDialog.Accepted:
-                    show_warning("Segmentation canceled.")
-                    return
-                idx = channel_dialog.get_channel_idx()
-                signal_data = np.take(signal_data, idx, -1).squeeze()
-            signal_data = np.stack([signal_data, signal_data, signal_data], axis=-1)
-        else:
-            signal_data = None
+            for signal_name, signal_layer_name in self.im2signal[image_name].items():
+                if not signal_layer_name in self.viewer.layers:
+                    show_warning(f"Signal layer {signal_layer_name} not found in viewer")
+                    continue
+                signal_data = self.viewer.layers[signal_layer_name].data
+                image_shape = image_data.shape
+                signal_shape = signal_data.shape
+                if not (
+                    (len(signal_shape) == len(image_shape) - 1 and signal_shape == image_shape[:-1]) or 
+                    (len(signal_shape) == len(image_shape) and signal_shape[:-1] == image_shape[:-1]) or
+                    (len(signal_shape) == 3 and len(image_shape) == 2 and signal_shape[:-1] == image_shape)
+                ):
+                    show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape} fo signal {signal_layer_name}. Skipping...")
+                    continue
+                if len(signal_shape) >= len(image_shape):
+                    channel_dialog = SignalChannelDialog(self, signal_shape[-1], signal_layer_name)
+                    if channel_dialog.exec_() != QDialog.Accepted:
+                        show_warning(f"No channel selected for signal {signal_layer_name} Skipping...")
+                        continue
+                    idx = channel_dialog.get_channel_idx()
+                    signal_data = np.take(signal_data, idx, -1).squeeze()
+                signal_field = np.stack([signal_data, signal_data, signal_data], axis=-1)
+                merged_signal_data.update({signal_name: signal_field})
     
         self._check_sam()
         if self.organoiDL.sam_predictor is None:
@@ -726,12 +748,7 @@ class OrganoidAnalyzerWidget(QWidget):
             mask_vis_shape[-1] = 3
             total_frames = image_data.shape[0]      
             final_image = np.zeros_like(mask_vis_shape, dtype=np.uint8)
-            
-            if signal_data is not None:
-                final_signal_seg = np.zeros_like(mask_vis_shape)
-            else:
-                signal_data = [None] * total_frames
-                final_signal_seg = None
+            final_signal_seg = {signal_name: np.zeros_like(mask_vis_shape) for signal_name, _ in merged_signal_data.items()}
 
             for i in progress(range(total_frames)):
                 frame_layer_name = f'TL_Frame{i}_{timelapse_name}'
@@ -743,12 +760,13 @@ class OrganoidAnalyzerWidget(QWidget):
                 frame = image_data[i]
                 if frame.shape[2] == 4:
                     frame = frame[:, :, :3]
-                masks, features, signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, signal_data[i])
+                frame_signal = {signal_name: signal_field[i] for signal_name, signal_field in merged_signal_data.items()}
+                masks, features, signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, frame_signal)
                 final_image[i] = collate_instance_masks(masks, color=True)
-                if final_signal_seg is not None:
-                    final_signal_seg[i] = collate_instance_masks(signal_masks, color=False)
+                for signal_name, signal_seg in signal_masks.items():
+                    final_signal_seg[signal_name][i] = collate_instance_masks(signal_seg, color=False)
                 if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['confidence']) != masks.shape[0]:
-                    show_error(f"Mismatch in number of masks and labels for layer {frame_layer_name}. Please rerun the segmentation.")
+                    show_error(f"Mismatch in number of masks and labels for layer {frame_layer_name}. Features have not been updated")
                     continue
                 tmp_dict = labels_layer.properties.copy()
                 tmp_dict.update(features)
@@ -759,9 +777,9 @@ class OrganoidAnalyzerWidget(QWidget):
             self.viewer.add_image(final_image, name=segmentation_layer_name, blending='additive')
             self.timelapse_segmentations[timelapse_name] = segmentation_layer_name
 
-            if final_signal_seg is not None:
-                signal_seg_layer_name = f"Segmentation-Signal-{timelapse_name}"
-                self.viewer.add_image(final_signal_seg, name=signal_seg_layer_name, blending='additive')
+            for signal_name, signal_seg in final_signal_seg.items():
+                signal_seg_layer_name = f"Segmentation-{signal_name}-{timelapse_name}"
+                self.viewer.add_image(signal_seg, name=signal_seg_layer_name, blending='additive', colormap="red")
 
         else:
 
@@ -771,21 +789,19 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.label_layer_name.startswith("TL_Frame"):
                 frame_idx = int(self.label_layer_name.split('_')[1][5:])
                 image_data = image_data[frame_idx]
-                if signal_data is not None:
-                    signal_data = signal_data[frame_idx]
+                merged_signal_data = {signal_name: signal_field[frame_idx] for signal_name, signal_field in merged_signal_data.items()}
             if image_data.ndim == 2:
                 image_data = np.stack([image_data, image_data, image_data], axis=-1)
             elif image_data.ndim == 3 and image_data.shape[2] == 4:
                 image_data = image_data[:, :, :3]
     
             segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-    
-            masks, features, signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, signal_data)
+            masks, features, signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
     
             self.viewer.add_image(collate_instance_masks(masks, color=True), name=segmentation_layer_name, blending='additive')
-            if signal_data is not None:
-                signal_seg_layer_name = f"Segmentation-Signal-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-                self.viewer.add_image(collate_instance_masks(signal_masks, color=False), name=signal_seg_layer_name, blending='additive')
+            for signal_name, signal_mask in signal_masks.items():
+                signal_seg_layer_name = f"Segmentation-{signal_name}-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
+                self.viewer.add_image(collate_instance_masks(signal_mask, color=False), name=signal_seg_layer_name, blending='additive', colormap="red")
             if len(labels_layer.properties['box_id']) != masks.shape[0] or len(labels_layer.properties['confidence']) != masks.shape[0]:
                 show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
                 return
@@ -1618,23 +1634,12 @@ class OrganoidAnalyzerWidget(QWidget):
         detection_guidance_checkbox = QCheckBox("Detection guidance")
         detection_guidance_checkbox.setChecked(False)
         detection_guidance_checkbox.stateChanged.connect(self._on_detection_guidance_checkbox_changed)
-        signal_btn = QPushButton("Upload Signal field")
-        signal_btn.clicked.connect(self._on_add_signal)
-        signal_btn.setStyleSheet("border: 0px")
         hbox_custom.addStretch(1)
         hbox_custom.addWidget(custom_btn)
         hbox_custom.addSpacing(15)
         hbox_custom.addWidget(detection_guidance_checkbox)
         hbox_custom.addStretch(1)
         vbox.addLayout(hbox_custom)
-
-        signal_hbox = QHBoxLayout()
-        signal_hbox.addStretch(1)
-        signal_btn = QPushButton("Upload Signal field")
-        signal_btn.clicked.connect(self._on_add_signal)
-        signal_hbox.addWidget(signal_btn)
-        signal_hbox.addStretch(1)
-        vbox.addLayout(signal_hbox)
         
         # Cache checkbox
         cache_hbox = QHBoxLayout()
@@ -1784,13 +1789,9 @@ class OrganoidAnalyzerWidget(QWidget):
         hbox_img.addWidget(image_label, 2)
         hbox_img.addWidget(self.segmentation_image_layer_selection, 4)
         vbox.addLayout(hbox_img)
-
-        self.signal_layer_label = QLabel("Signal layer: None")
-        self.signal_layer_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-        vbox.addWidget(self.signal_layer_label)
         
         # Run for entire timelapse checkbox
-        self.run_for_timelapse_checkbox = QCheckBox("Run for entire timelapse")
+        self.run_for_timelapse_checkbox = QCheckBox("Apply to entire timelapse")
         self.run_for_timelapse_checkbox.setVisible(False)
         vbox.addWidget(self.run_for_timelapse_checkbox)
         
@@ -1807,7 +1808,34 @@ class OrganoidAnalyzerWidget(QWidget):
         hbox_run.addSpacing(15)
         hbox_run.addWidget(export_btn)
         hbox_run.addStretch(1)   
-        vbox.addLayout(hbox_run)     
+        vbox.addLayout(hbox_run)
+
+        signal_hbox = QHBoxLayout()
+        signal_hbox.addStretch(1)
+        signal_btn = QPushButton("+ Add signal")
+        signal_btn.clicked.connect(self._on_add_signal)
+        signal_hbox.addWidget(signal_btn)
+        signal_hbox.addStretch(1)
+        vbox.addLayout(signal_hbox)
+
+        self.signal_layer_label = QLabel("Associated signal layers:")
+        self.signal_layer_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.signal_layer_label.setWordWrap(True)
+        vbox.addWidget(self.signal_layer_label)
+
+        self.signals_list = QTableWidget()
+        self.signals_list.setColumnCount(3)
+        self.signals_list.setHorizontalHeaderLabels(["Signal", "Layer", "Delete"])
+        self.signals_list.verticalHeader().setVisible(False)
+        self.signals_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.signals_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.signals_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.signals_list.verticalHeader().setDefaultSectionSize(50)
+        self.signals_list.verticalHeader().setMinimumSectionSize(50)
+        self.signals_list.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.signals_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        vbox.addWidget(self.signals_list)
+
         segmentation_widget.setLayout(vbox)
         return segmentation_widget
 
@@ -2011,12 +2039,32 @@ class OrganoidAnalyzerWidget(QWidget):
             self.run_for_timelapse_checkbox.setVisible(True)
         else:
             self.run_for_timelapse_checkbox.setVisible(False)
+
+        self.signals_list.setRowCount(0)
         if self.label_layer_name in self.label2im and self.label2im[self.label_layer_name] in self.im2signal:
             image_name = self.label2im[self.label_layer_name]
-            self.signal_layer_label.setText(f"Signal layer: {self.im2signal[image_name]}")
-        else:
-            self.signal_layer_label.setText(f"Signal layer: None")
-    
+            self.signals_list.setRowCount(len(self.im2signal[image_name].items()))
+            for row, (signal_name, layer_name) in enumerate(self.im2signal[image_name].items()):
+
+                signal_item = QTableWidgetItem(signal_name)
+                self.signals_list.setItem(row, 0, signal_item)
+
+                layer_item = QTableWidgetItem(layer_name)
+                self.signals_list.setItem(row, 1, layer_item)
+
+                delete_btn = QPushButton()
+                delete_btn.setText("Delete")
+                delete_btn.clicked.connect(lambda: self._delete_signal_matching(image_name, signal_name))
+                btn_container = QWidget()
+                btn_layout = QHBoxLayout(btn_container)
+                btn_layout.addWidget(delete_btn)
+                btn_layout.setAlignment(Qt.AlignCenter)
+                self.signals_list.setCellWidget(row, 2, btn_container)
+
+    def _delete_signal_matching(self, image_name, signal_name):
+        self.im2signal[image_name].pop(signal_name, None)
+        self._on_labels_layer_change()
+
     def _on_layer_name_change(self, event):
         """
         Called whether user changes the name of any of the layers.
@@ -2097,14 +2145,13 @@ class OrganoidAnalyzerWidget(QWidget):
         
         image_name = signal_dialog.get_target()
         from_existing, signal_uri = signal_dialog.get_source()
+        signal_name = signal_dialog.get_name()
 
         if image_name == signal_uri:
             show_warning("Signal and target image are the same! Please, select another image pair")
             return
 
-        if from_existing:
-            self.im2signal[image_name] = signal_uri
-        else:
+        if not from_existing:
             old_layers = self._get_layer_names()
             self.viewer.open(signal_uri)
             curr_layers = self._get_layer_names()
@@ -2113,7 +2160,6 @@ class OrganoidAnalyzerWidget(QWidget):
                 show_error(f"Error importing signal. New layers encountered {new_layers} (1 expected)")
                 return
             signal_uri = new_layers[0]
-            self.im2signal[image_name] = signal_uri
         image_shape = self.viewer.layers[image_name].data.shape
         signal_shape = self.viewer.layers[signal_uri].data.shape
         if not (
@@ -2121,5 +2167,11 @@ class OrganoidAnalyzerWidget(QWidget):
             (len(signal_shape) == len(image_shape) and signal_shape[:-1] == image_shape[:-1]) or
             (len(signal_shape) == 3 and len(image_shape) == 2 and signal_shape[:-1] == image_shape)
         ):
-            show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Plase select another signal")
+            show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Signal not added")
+            return
+        if not image_name in self.im2signal:
+            self.im2signal[image_name] = {signal_name: signal_uri}
+        else:
+            self.im2signal[image_name].update({signal_name: signal_uri})
+        self.im2signal[image_name].update({signal_name: signal_uri})
         self._on_labels_layer_change()
