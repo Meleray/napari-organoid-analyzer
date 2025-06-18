@@ -181,10 +181,11 @@ class ExportDialog(QDialog):
     """
     Dialog for selecting export options
     """
-    def __init__(self, parent, available_features):
+    def __init__(self, parent, available_features, masks_avilable):
         super().__init__(parent)
         self.setWindowTitle("Export Options")
         self.setMinimumWidth(500)
+        self.masks_available = masks_avilable
         
         # Main layout
         layout = QVBoxLayout()
@@ -218,8 +219,9 @@ class ExportDialog(QDialog):
         self.export_features.stateChanged.connect(self._toggle_feature_selection)
         
         options_layout.addWidget(self.export_bboxes)
-        options_layout.addWidget(self.export_instance_masks)
-        options_layout.addWidget(self.export_collated_mask)
+        if self.masks_available:
+            options_layout.addWidget(self.export_instance_masks)
+            options_layout.addWidget(self.export_collated_mask)
         options_layout.addWidget(self.export_features)
         
         # Bottom part with options on left and feature selection on right
@@ -274,8 +276,8 @@ class ExportDialog(QDialog):
     def get_export_options(self):
         return {
             'bboxes': self.export_bboxes.isChecked(),
-            'instance_masks': self.export_instance_masks.isChecked(),
-            'collated_mask': self.export_collated_mask.isChecked(),
+            'instance_masks': self.masks_available and self.export_instance_masks.isChecked(),
+            'collated_mask': self.masks_available and self.export_collated_mask.isChecked(),
             'features': self.export_features.isChecked()
         }
     

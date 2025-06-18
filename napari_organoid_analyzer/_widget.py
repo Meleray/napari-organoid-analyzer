@@ -147,9 +147,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.timelapse_segmentations = {}
         self.im2signal = {}
 
-        # Initialize multi_annotation_mode to False by default
-        self.multi_annotation_mode = False
-        # self.single_annotation_mode = True  # Initially, it's single annotation mode
 
         # Add cache-related attributes
         self.cache_enabled = True  # Default to enabled
@@ -744,11 +741,12 @@ class OrganoidAnalyzerWidget(QWidget):
                 self.viewer.window._status_bar._toggle_activity_dock(False)
                 return
             
-            mask_vis_shape = image_data.shape
+            mask_vis_shape = list(image_data.shape)
             mask_vis_shape[-1] = 3
             total_frames = image_data.shape[0]      
-            final_image = np.zeros_like(mask_vis_shape, dtype=np.uint8)
-            final_signal_seg = {signal_name: np.zeros_like(mask_vis_shape) for signal_name, _ in merged_signal_data.items()}
+            final_image = np.zeros(mask_vis_shape, dtype=np.uint8)
+            print(final_image.shape)
+            final_signal_seg = {signal_name: np.zeros(mask_vis_shape) for signal_name, _ in merged_signal_data.items()}
 
             for i in progress(range(total_frames)):
                 frame_layer_name = f'TL_Frame{i}_{timelapse_name}'
@@ -836,9 +834,11 @@ class OrganoidAnalyzerWidget(QWidget):
         available_features = []
         if hasattr(label_layer, 'properties') and label_layer.properties:
             available_features = [k for k in label_layer.properties.keys()]
+
+        masks_available = (self.label_layer_name in self.organoiDL.pred_masks)
         
         # Open the export dialog
-        export_dialog = ExportDialog(self, available_features)
+        export_dialog = ExportDialog(self, available_features, masks_available)
         if export_dialog.exec_() != QDialog.Accepted:
             show_warning("Export canceled.")
             return
@@ -878,51 +878,48 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _export_bboxes(self, label_layer, export_path: Path):
         """Export bounding boxes to JSON file"""
-        bboxes = label_layer.data
-        
-        if len(bboxes) == 0: 
-            show_warning('No organoids detected! Skipping bounding box export.')
-            return
-        
-        # Check for multi-annotation mode
-        if self.multi_annotation_mode:
-            # Get the edge colors for all bounding boxes
-            edge_colors = label_layer.edge_color
-            labels = []
+        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+            
+            if not label_layer.name.startswith("TL_Frame"):
+                raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
+            
+            timelapse_name = get_timelapse_name(label_layer.name)
 
-            # Check if all bounding boxes have their edge color set
-            green = np.array(settings.COLOR_CLASS_1)
-            blue = np.array(settings.COLOR_CLASS_2)
-
-            all_colored = True
-            for edge_color in edge_colors:
-                if not (np.allclose(edge_color[:3], green[:3]) or np.allclose(edge_color[:3], blue[:3])):
-                    all_colored = False
-                    break
-
-            if not all_colored:
-                show_warning('Not all bounding boxes have a color assigned. Using default labels.')
-                labels = [0] * len(bboxes)
-            else:
-                # Assign organoid label based on edge_color
-                for edge_color in edge_colors:
-                    if np.allclose(edge_color[:3], green[:3]):
-                        labels.append(0)  # Label for green
-                    elif np.allclose(edge_color[:3], blue[:3]):
-                        labels.append(1)  # Label for blue
-                    else:
-                        labels.append(0)  # Default label
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            
+            timelapse_layers = self.timelapses[timelapse_name]
+            data_json = {}
+            for label_layer_name in timelapse_layers:
+                if not label_layer_name in self.viewer.layers:
+                    raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
+                if not label_layer_name.startswith("TL_Frame"):
+                    raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
+                frame_layer = self.viewer.layers[label_layer_name]
+                if len(frame_layer.data) == 0:
+                    show_warning(f"No bboxes detected in layer {label_layer_name}. Skippingl...")
+                    continue
+                frame_idx = int(label_layer_name.split('_')[1][5:])
+                frame_data = utils.get_bboxes_as_dict(
+                    frame_layer.data,
+                    frame_layer.properties['box_id'],
+                    frame_layer.properties['confidence'],
+                    frame_layer.scale,
+                )
+                data_json.update({frame_idx: frame_data})            
         else:
-            # Single annotation mode: all bounding boxes get a default label
-            labels = [0] * len(bboxes)
-
-        data_json = utils.get_bboxes_as_dict(
-            bboxes, 
-            label_layer.properties['box_id'],
-            label_layer.properties['confidence'],
-            label_layer.scale,
-            labels=labels
-        )
+            bboxes = label_layer.data
+        
+            if len(bboxes) == 0: 
+                show_warning('No organoids detected! Skipping bounding box export.')
+                return
+        
+            data_json = utils.get_bboxes_as_dict(
+                bboxes, 
+                label_layer.properties['box_id'],
+                label_layer.properties['confidence'],
+                label_layer.scale,
+            )
             
         # Write bbox coordinates to json
         json_file_path = export_path / f"{self.label_layer_name}_bboxes.json"
@@ -930,47 +927,145 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _export_instance_masks(self, label_layer, export_path: Path):
         """Export instance masks to NPY"""
-        
-        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
-        if len(instance_masks) == 0:
-            show_warning("No masks found for segmentation. Skipping mask export.")
-            return
-        
-        # Export instance masksy
-        box_ids = label_layer.properties['box_id']
-        mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
+
+        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
             
-        instance_mask_file_path = export_path / f"{self.label_layer_name}_instance_masks.npy"
-        np.save(instance_mask_file_path, mask_dict)
+            if not label_layer.name.startswith("TL_Frame"):
+                raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
+            
+            timelapse_name = get_timelapse_name(label_layer.name)
+
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            
+            timelapse_layers = self.timelapses[timelapse_name]
+            export_folder = export_path / f"instance_masks_{timelapse_name}"
+            export_folder.mkdir(exist_ok=True)
+            for label_layer_name in timelapse_layers:
+                if not label_layer_name in self.viewer.layers:
+                    raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
+                if not label_layer_name.startswith("TL_Frame"):
+                    raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
+                if not label_layer_name in self.organoiDL.pred_masks:
+                    show_warning(f"No masks found for layer {label_layer_name}. Skippingl...")
+                    continue
+                instance_masks = self.organoiDL.pred_masks[label_layer_name]
+                frame_idx = int(label_layer_name.split('_')[1][5:])
+                box_ids = self.viewer.layers[label_layer_name].properties['box_id']
+                mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
+                file_path = export_folder / f"Frame_{frame_idx}"
+                np.save(file_path, mask_dict)
+        else:
+        
+            instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+            if len(instance_masks) == 0:
+                show_warning("No masks found for segmentation. Skipping mask export.")
+                return
+        
+            # Export instance masks
+            box_ids = label_layer.properties['box_id']
+            mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
+            
+            instance_mask_file_path = export_path / f"{self.label_layer_name}_instance_masks.npy"
+            np.save(instance_mask_file_path, mask_dict)
 
     def _export_collated_masks(self, label_layer, export_path: Path):
         """Export collated mask to NPY"""
-        
-        instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
-        if len(instance_masks) == 0:
-            show_warning("No masks found for segmentation. Skipping mask export.")
-            return
+        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+            
+            if not label_layer.name.startswith("TL_Frame"):
+                raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
+            
+            timelapse_name = get_timelapse_name(label_layer.name)
 
-        collated_mask = collate_instance_masks(instance_masks)
-        collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
-        np.save(collated_mask_file_path, collated_mask)
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            
+            timelapse_layers = self.timelapses[timelapse_name]
+            export_folder = export_path / f"collated_masks_{timelapse_name}"
+            export_folder.mkdir(exist_ok=True)
+            for label_layer_name in timelapse_layers:
+                if not label_layer_name in self.viewer.layers:
+                    raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
+                if not label_layer_name.startswith("TL_Frame"):
+                    raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
+                if not label_layer_name in self.organoiDL.pred_masks:
+                    show_warning(f"No masks found for layer {label_layer_name}. Skippingl...")
+                    continue
+                instance_masks = self.organoiDL.pred_masks[label_layer_name]
+                frame_idx = int(label_layer_name.split('_')[1][5:])
+                collated_mask = collate_instance_masks(instance_masks)
+                file_path = export_folder / f"Frame_{frame_idx}"
+                np.save(file_path, collated_mask)
+        else: 
+        
+            instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
+            if len(instance_masks) == 0:
+                show_warning("No masks found for segmentation. Skipping mask export.")
+                return
+
+            collated_mask = collate_instance_masks(instance_masks)
+            collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
+            np.save(collated_mask_file_path, collated_mask)
 
     def _export_features(self, label_layer, export_path: Path, selected_features):
         """Export selected features to CSV"""
         # Extract only the selected features
         features_to_export = {}
-        for feature in selected_features:
-            if feature in label_layer.properties:
-                features_to_export[feature] = label_layer.properties[feature]
-            elif feature == "Bounding box":
-                features_to_export[feature] = convert_boxes_from_napari_view(label_layer.data).tolist()
-            else:
-                show_error(f"Feature '{feature}' not found in the layer properties.")
+        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+            
+            if not label_layer.name.startswith("TL_Frame"):
+                raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
+            
+            timelapse_name = get_timelapse_name(label_layer.name)
+
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            
+            timelapse_layers = self.timelapses[timelapse_name]
+            filename = f"{timelapse_name}_features.csv"
+            for feature in selected_features:
+                features_to_export[feature] = []
+            features_to_export['frame_idx'] = []
+
+            for label_layer_name in timelapse_layers:
+                if not label_layer_name in self.viewer.layers:
+                    raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
+                if not label_layer_name.startswith("TL_Frame"):
+                    raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
+                frame_layer = self.viewer.layers[label_layer_name]
+                frame_idx = int(label_layer_name.split('_')[1][5:])
+                feature_sizes = {}
+                for feature in selected_features:
+                    if not feature in frame_layer.properties and feature != "Bounding box":
+                        show_warning(f"Feature {feature} not found for layer {label_layer_name}. Skipping...")
+                        continue
+                    if feature == "Bounding box":
+                        features_to_export[feature].extend(convert_boxes_from_napari_view(frame_layer.data).tolist())
+                        feature_sizes[feature] = len(frame_layer.data)
+                    else:
+                        features_to_export[feature].extend(frame_layer.properties[feature])
+                        feature_sizes[feature] = len(frame_layer.properties[feature])
+                uniform_size = max(feature_sizes.values())
+                features_to_export['frame_idx'].extend([frame_idx] * uniform_size)
+                for feature, cur_size in feature_sizes.items():
+                    if cur_size < uniform_size:
+                        show_warning(f"Missing data for feature {feature} in layer {label_layer_name}. Extending with None...")
+                        features_to_export[feature].extend([None] * (uniform_size - cur_size))
+        else:
+            filename = f"{label_layer.name}_features.csv"
+            for feature in selected_features:
+                if feature in label_layer.properties:
+                    features_to_export[feature] = label_layer.properties[feature]
+                elif feature == "Bounding box":
+                    features_to_export[feature] = convert_boxes_from_napari_view(label_layer.data).tolist()
+                else:
+                    show_warning(f"Feature '{feature}' not found in the layer properties.")
         
         # Convert to pandas DataFrame
         if features_to_export:
             df = pd.DataFrame(features_to_export)
-            features_file_path = export_path / f"{self.label_layer_name}_features.csv"
+            features_file_path = export_path / filename
             df.to_csv(features_file_path, index=False)
         else:
             show_warning("No features selected for export or no features available.")
@@ -1015,11 +1110,10 @@ class OrganoidAnalyzerWidget(QWidget):
             # first update bboxes in organoiDLin case user has added/removed
             if self.apply_to_timelapse_checkbox.isVisible() and self.apply_to_timelapse_checkbox.isChecked():
                 if not self.cur_shapes_layer.name.startswith("TL_Frame"):
-                    show_error("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
+                    raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
                 timelapse_name = get_timelapse_name(self.cur_shapes_layer.name)
-                if timelapse_name not in self.timelapses or self.cur_shapes_layer.name in self.timelapses:
-                    show_error(f"Internal error: unknown timelapse or frame name {timelapse_name}")
-                    return
+                if timelapse_name not in self.timelapses or self.cur_shapes_layer.name not in self.timelapses[timelapse_name]:
+                    raise RuntimeError(f"Internal error: unknown timelapse or frame name {timelapse_name}")
                 old_shape_layer_name = self.cur_shapes_layer.name
                 for frame_name in self.timelapses[timelapse_name]:
                     self.organoiDL.update_bboxes_scores(frame_name,
@@ -1119,17 +1213,6 @@ class OrganoidAnalyzerWidget(QWidget):
         fd = QFileDialog()
         name,_ = fd.getSaveFileName(self, 'Save File', potential_name, 'Image files (*.png);;(*.tiff)') #, 'CSV Files (*.csv)')
         if name: imsave(name, screenshot)
-
-    def on_annotation_mode_changed(self, index):
-        """Callback for dropdown selection."""
-        if index == 0:  # Single Annotation
-            self.multi_annotation_mode = False
-            # self.single_annotation_mode = True
-            show_info("Switched to Single Annotation mode.")
-        elif index == 1:  # Multi Annotation
-            self.multi_annotation_mode = True
-            # self.single_annotation_mode = False
-            show_info("Switched to Multi Annotation mode.")
 
     def _on_custom_labels_click(self):
         """
@@ -1433,7 +1516,6 @@ class OrganoidAnalyzerWidget(QWidget):
         window_sizes_box = self._setup_window_sizes_box()
         downsampling_box = self._setup_downsampling_box()
         run_box = self._setup_run_box()
-        annotation_mode_box = self._setup_annotation_mode_box()  # Annotation mode dropdown to select single or multi-annotation
         self._setup_progress_box()
 
         # and add all these to the layout
@@ -1445,7 +1527,6 @@ class OrganoidAnalyzerWidget(QWidget):
         vbox.addLayout(window_sizes_box)
         vbox.addLayout(downsampling_box)
         vbox.addLayout(run_box)
-        vbox.addLayout(annotation_mode_box)  # Add the annotation dropdown
         vbox.addWidget(self.progress_box)
         input_widget.setLayout(vbox)
         return input_widget
@@ -1662,24 +1743,6 @@ class OrganoidAnalyzerWidget(QWidget):
         Called when the detection guidance checkbox is toggled.
         """
         self.guided_mode = (state == Qt.Checked)
-
-    def _setup_annotation_mode_box(self):
-        """
-        Sets up the GUI part where the annotation mode is selected.
-        """
-        hbox = QHBoxLayout()
-
-        # Label
-        annotation_mode_label = QLabel("Annotation Mode:", self)
-        hbox.addWidget(annotation_mode_label)
-
-        # Dropdown
-        self.annotation_mode_dropdown = QComboBox()
-        self.annotation_mode_dropdown.addItems(["Single Annotation", "Multi Annotation"])
-        self.annotation_mode_dropdown.currentIndexChanged.connect(self.on_annotation_mode_changed)
-        hbox.addWidget(self.annotation_mode_dropdown)
-        
-        return hbox
 
     def _setup_progress_box(self):
         """

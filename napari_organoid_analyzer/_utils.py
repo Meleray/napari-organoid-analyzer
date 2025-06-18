@@ -115,7 +115,7 @@ def write_to_json(name: Path, data):
     with open(name, 'w') as outfile:
         json.dump(data, outfile)  
 
-def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales, labels):
+def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales):
     """ Write all data, boxes, ids and scores, scale and class label, to a dict so we can later save as a json """
     data_json = {} 
     for idx, bbox in enumerate(bboxes):
@@ -130,7 +130,6 @@ def get_bboxes_as_dict(bboxes, bbox_ids, scores, scales, labels):
                                                 'confidence': str(scores[idx]),
                                                 'scale_x': str(scales[0]),
                                                 'scale_y': str(scales[1]),
-                                                'class': labels[idx]
                                                 }
                         })
     return data_json
