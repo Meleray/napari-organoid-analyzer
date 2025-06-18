@@ -20,6 +20,7 @@ from napari_organoid_analyzer._utils import (
     validate_bboxes,
     get_timelapse_name
 )
+from napari_organoid_analyzer._widgets.annotation import get_annotation_dialogue
 
 
 import numpy as np
@@ -52,6 +53,7 @@ from qtpy.QtWidgets import (
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
 from napari_organoid_analyzer import settings
+from napari_organoid_analyzer import session
 from napari_organoid_analyzer._widgets.dialogues import ConfirmUpload, ConfirmSamUpload, ExportDialog, SignalDialog, SignalChannelDialog
 import torch
 import pandas as pd
@@ -62,6 +64,7 @@ import cv2
 import warnings
 warnings.filterwarnings("ignore")
 
+ANNOTATION_TYPES = ['Text', 'Ruler', 'Objects / Boxes', 'Classes', 'Number']
 
 class OrganoidAnalyzerWidget(QWidget):
     '''
@@ -120,7 +123,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # models to the model dict
         settings.init()
         utils.add_local_models()
-        self.load_cached_settings()
+        session.load_cached_settings()
         self.model_id = 2 # yolov3
         self.model_name = list(settings.MODELS.keys())[self.model_id]
         
@@ -228,19 +231,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.confidence_slider_changed = False
         self.diameter_textbox_changed = False
         self.confidence_textbox_changed = False
-
-
-    def load_cached_settings(self):
-        self.session_vars = dict(
-            export_folder = None
-        )
-        if (settings.SETTINGS_DIR / 'session_vars.json').exists():
-            with open(settings.SETTINGS_DIR / 'session_vars.json', 'r') as f:
-                self.session_vars.update(json.load(f))
-    
-    def set_session_var(self, name, value):
-        self.session_vars.update({name: value})
-        utils.write_to_json(settings.SETTINGS_DIR / 'session_vars.json', self.session_vars)
 
     def handle_progress(self, blocknum, blocksize, totalsize):
         """ When the model is being downloaded, this method is called and th progress of the download
@@ -2108,10 +2098,8 @@ class OrganoidAnalyzerWidget(QWidget):
         # Show or hide the "Run for entire timelapse" checkbox based on layer name
         if self.label_layer_name.startswith("TL_Frame"):
             self.annotation_run_for_timelapse_checkbox.setVisible(True)
-            self.annotation_ignore_organoid_tracks_checkbox.setVisible(True)
         else:
             self.annotation_run_for_timelapse_checkbox.setVisible(False)
-            self.annotation_ignore_organoid_tracks_checkbox.setVisible(False)
 
     def _on_layer_name_change(self, event):
         """
@@ -2215,12 +2203,6 @@ class OrganoidAnalyzerWidget(QWidget):
         self.annotation_run_for_timelapse_checkbox.setChecked(False)
         vbox.addWidget(self.annotation_run_for_timelapse_checkbox)
         
-        # Run for entire timelapse checkbox
-        self.annotation_ignore_organoid_tracks_checkbox = QCheckBox("Ignore tracking")
-        self.annotation_ignore_organoid_tracks_checkbox.setVisible(False)
-        self.annotation_ignore_organoid_tracks_checkbox.setChecked(True)
-        vbox.addWidget(self.annotation_ignore_organoid_tracks_checkbox)
-        
         widget.setLayout(vbox)
         return widget
         
@@ -2235,14 +2217,21 @@ class OrganoidAnalyzerWidget(QWidget):
             exist in the data or in the created features already.
         - start annotating button
         """
-        widget = QGroupBox('Create feature')
+        widget = QGroupBox('Create annotation')
         vbox = QVBoxLayout()
+
+        #Annotation name
+        hbox_config0 = QHBoxLayout()
+        annotation_name_desc = QLabel('Annotation name: ', self)
+        self.new_annotation_name = QLineEdit()
+        hbox_config0.addWidget(annotation_name_desc, 1)
+        hbox_config0.addWidget(self.new_annotation_name, 4)
+        vbox.addLayout(hbox_config0)
         
         # Feature name
         hbox_config1 = QHBoxLayout()
-        feature_name_desc = QLabel('Name: ', self)
+        feature_name_desc = QLabel('Feature name: ', self)
         self.new_feature_name = QLineEdit()
-        
         hbox_config1.addWidget(feature_name_desc, 1)
         hbox_config1.addWidget(self.new_feature_name, 4)
         vbox.addLayout(hbox_config1)
@@ -2252,7 +2241,7 @@ class OrganoidAnalyzerWidget(QWidget):
         feature_type_desc = QLabel('Type: ', self)
         feature_type_desc.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.new_feature_type_selection = QComboBox()
-        for ft in ['Text', 'Ruler', 'Objects / Boxes', 'Classes', 'Number']:
+        for ft in ANNOTATION_TYPES:
             self.new_feature_type_selection.addItem(ft)
 
         start_annotation = QPushButton('Start annotating')
@@ -2279,7 +2268,7 @@ class OrganoidAnalyzerWidget(QWidget):
         
         # Feature name
         hbox_config1 = QHBoxLayout()
-        feature_name_desc = QLabel('Name: ', self)
+        feature_name_desc = QLabel('Annotation name: ', self)
         self.resume_feature_name = QComboBox()
         for ft in self._load_annotation_features():
             self.resume_feature_name.addItem(ft)
@@ -2309,36 +2298,40 @@ class OrganoidAnalyzerWidget(QWidget):
         return widget
 
     def _on_create_annotation_feature(self):
+        annotation_name = self.new_annotation_name.text()
         feature = {
-            'name': self.new_feature_name.text(),
-            'type': self.new_feature_type_selection.currentText(),
+            annotation_name: {
+                'name': self.new_feature_name.text(),
+                'type': self.new_feature_type_selection.currentText(),
+                'data': {}
+            }
         }
-        annotation_features = self.session_vars.get('annotation_features', [])
-        if feature['name'] in [f['name'] for f in annotation_features]:
-            raise ValueError(f"Feature of name {feature['name']} already exists. Please choose a different name or continue below.")
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+        if annotation_name in annotation_features:
+            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name or delete existing annotation")
         
         # Add annotation feature to cached setting
-        annotation_features.append(feature)
-        self.set_session_var('annotation_features', annotation_features)
+        annotation_features.update(feature)
+        session.set_session_var('annotation_features', annotation_features)
 
         # Add annotation feature to resume annotation dropdown
-        self.resume_feature_name.addItem(feature['name'])
+        self.resume_feature_name.addItem(annotation_name)
 
         self.annotate(feature)
 
     def _load_annotation_features(self):
-        annotation_features = self.session_vars.get('annotation_features', [])
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
 
         # Return list of existing features
-        return [f['name'] for f in annotation_features]
+        return list(annotation_features.keys())
     
     def _on_delete_annotation_feature(self):
         feature_name = self.resume_feature_name.currentText()
-        annotation_features = self.session_vars.get('annotation_features', [])
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
 
         # Delete feature from cached settings
-        annotation_features = [f for f in annotation_features if f['name']!=feature_name]
-        self.set_session_var('annotation_features', annotation_features)
+        annotation_features.pop(feature_name, None)
+        session.set_session_var('annotation_features', annotation_features)
 
         # Delete feature from the resume annotation dropdown
         item_id = self.resume_feature_name.findText(feature_name)
@@ -2346,19 +2339,53 @@ class OrganoidAnalyzerWidget(QWidget):
     
     def _on_continue_annotation(self):
         feature_name = self.resume_feature_name.currentText()
-        annotation_features = self.session_vars.get('annotation_features', [])
-        feature = None
-        for f in annotation_features:
-            if f['name'] == feature_name:
-                feature = f
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+        feature = annotation_features.get(feature_name, None)
         if feature is None:
             raise RuntimeError(f"Feature with name {feature_name} was not found.")
-        
-        self.annotate(feature)
+        if not feature['type'] in ANNOTATION_TYPES:
+            raise RuntimeError(f"Feature with name {feature_name} has unknown annotation type {feature['type']}")
+        self.annotate({feature_name: feature})
 
     def annotate(self, feature):
         """Starts the annotation loop with custom annotation widgets depending on the feature type."""
-        pass
+        annotation_name = next(iter(feature))
+        annotation_data = {
+            "annotation_name": annotation_name,
+            "property_name": feature[annotation_name]['name'],
+            "type": feature[annotation_name]['type'],
+            "data": feature[annotation_name]['data']
+        }
+        
+        label_layer_name = self.annotation_image_layer_selection.currentText()
+        if not label_layer_name:
+            raise ValueError("No label layer selected for annotation. Please select a label layer and try again.")
+        if label_layer_name not in self.viewer.layers or label_layer_name not in self.label2im:
+            raise ValueError(f"Label layer {label_layer_name} not found in viewer or doesn't have corresponding image.")
+        labels_layer = self.viewer.layers[label_layer_name]
+        
+        image_layer_name = self.label2im[label_layer_name]
+        if image_layer_name not in self.viewer.layers:
+            raise ValueError(f"Image layer {image_layer_name} not found in viewer")
+        
+        image = self.viewer.layers[image_layer_name].data
+        bboxes = labels_layer.data
+        bboxes = convert_boxes_from_napari_view(bboxes).numpy()
+        properties = labels_layer.properties.copy()
+
+        for property_name, property in properties.items():
+            if len(property) != bboxes.shape[0]:
+                raise RuntimeError(f"Number of properties for propertsave_annotay {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
+            
+        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data)
+        if annotation_dialogue.exec_() != QDialog.Accepted:
+            show_warning("Annotation cancelled. But your changes have been saved.")
+            return
+        new_annotations = annotation_dialogue.get_annotations()
+        new_annotations = [new_annotations[str(box_id)] for box_id in properties['box_id']]
+        properties.update({annotation_data['property_name']: new_annotations})
+        labels_layer.properties = properties
+
     def _on_add_signal(self):
         signal_dialog = SignalDialog(self, self._get_layer_names())
 
@@ -2370,18 +2397,13 @@ class OrganoidAnalyzerWidget(QWidget):
         from_existing, signal_uri = signal_dialog.get_source()
         signal_name = signal_dialog.get_name()
 
-        if image_name == signal_uri:
-            show_warning("Signal and target image are the same! Please, select another image pair")
-            return
-
         if not from_existing:
             old_layers = self._get_layer_names()
             self.viewer.open(signal_uri)
             curr_layers = self._get_layer_names()
             new_layers = [name for name in curr_layers if not name in old_layers]
             if len(new_layers) != 1:
-                show_error(f"Error importing signal. New layers encountered {new_layers} (1 expected)")
-                return
+                raise RuntimeError(f"Error importing signal. New layers encountered {new_layers} (1 expected)")
             signal_uri = new_layers[0]
         image_shape = self.viewer.layers[image_name].data.shape
         signal_shape = self.viewer.layers[signal_uri].data.shape
@@ -2390,8 +2412,7 @@ class OrganoidAnalyzerWidget(QWidget):
             (len(signal_shape) == len(image_shape) and signal_shape[:-1] == image_shape[:-1]) or
             (len(signal_shape) == 3 and len(image_shape) == 2 and signal_shape[:-1] == image_shape)
         ):
-            show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Signal not added")
-            return
+            raise RuntimeError(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Signal not added")
         if not image_name in self.im2signal:
             self.im2signal[image_name] = {signal_name: signal_uri}
         else:
