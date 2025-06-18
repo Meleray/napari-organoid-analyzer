@@ -2210,10 +2210,6 @@ class OrganoidAnalyzerWidget(QWidget):
         from_existing, signal_uri = signal_dialog.get_source()
         signal_name = signal_dialog.get_name()
 
-        if image_name == signal_uri:
-            show_warning("Signal and target image are the same! Please, select another image pair")
-            return
-
         if not from_existing:
             old_layers = self._get_layer_names()
             self.viewer.open(signal_uri)
