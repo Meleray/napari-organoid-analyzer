@@ -594,7 +594,7 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info('Keep number of window sizes and downsampling the same and try again!')
             return
         
-        if self.guided_mode and (not self.guidance_layer_name or self.guidance_layer_name not in self.viewer.layers):
+        if not self.guidance_layer_name is None and (not self.guidance_layer_name or self.guidance_layer_name not in self.viewer.layers):
             show_error("Guidance layer not found in the viewer. Please select a valid guidance layer.")
             return
         
@@ -602,7 +602,7 @@ class OrganoidAnalyzerWidget(QWidget):
         img_data = self.viewer.layers[self.image_layer_name].data
 
         if img_data.ndim == 3 or img_data.ndim == 2:
-            if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[:2]):
+            if not self.guidance_layer_name is None and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[:2]):
                 show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
                 return
             labels_layer_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
@@ -610,7 +610,7 @@ class OrganoidAnalyzerWidget(QWidget):
             self.viewer.window._status_bar._toggle_activity_dock(True)
             self._detect_organoids(img_data, labels_layer_name)
         elif img_data.ndim == 4:
-            if self.guided_mode and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[1:3]):
+            if not self.guidance_layer_name is None and not validate_bboxes(self.viewer.layers[self.guidance_layer_name].data, img_data.shape[1:3]):
                 show_error(f"Bboxes from guidance layer {self.guidance_layer_name} cannot be applied to image {self.image_layer_name} with shape {img_data.shape[:2]}")
                 return
             timelapse_name = f'{self.image_layer_name}-Labels-{self.model_name}-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
@@ -656,7 +656,7 @@ class OrganoidAnalyzerWidget(QWidget):
             show_info('Found existing labels layer. Please remove or rename it and try again!')
             return 
         
-        crops = convert_boxes_from_napari_view(self.viewer.layers[self.guidance_layer_name].data).tolist() if self.guided_mode else [[0, 0, img_data.shape[0], img_data.shape[1]]]
+        crops = convert_boxes_from_napari_view(self.viewer.layers[self.guidance_layer_name].data).tolist() if not self.guidance_layer_name is None else [[0, 0, img_data.shape[0], img_data.shape[1]]]
 
         # run inference
         self.organoiDL.run(img_data, 
@@ -710,7 +710,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 ):
                     show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape} fo signal {signal_layer_name}. Skipping...")
                     continue
-                if len(signal_shape) >= len(image_shape):
+                if len(signal_shape) >= len(image_shape) and len(signal_shape) >= 3:
                     channel_dialog = SignalChannelDialog(self, signal_shape[-1], signal_layer_name)
                     if channel_dialog.exec_() != QDialog.Accepted:
                         show_warning(f"No channel selected for signal {signal_layer_name} Skipping...")
@@ -745,8 +745,7 @@ class OrganoidAnalyzerWidget(QWidget):
             mask_vis_shape[-1] = 3
             total_frames = image_data.shape[0]      
             final_image = np.zeros(mask_vis_shape, dtype=np.uint8)
-            print(final_image.shape)
-            final_signal_seg = {signal_name: np.zeros(mask_vis_shape) for signal_name, _ in merged_signal_data.items()}
+            final_signal_seg = {signal_name: np.zeros(mask_vis_shape[:-1]) for signal_name, _ in merged_signal_data.items()}
 
             for i in progress(range(total_frames)):
                 frame_layer_name = f'TL_Frame{i}_{timelapse_name}'
@@ -1406,7 +1405,6 @@ class OrganoidAnalyzerWidget(QWidget):
                 self.guidance_selection.addItem(layer_name)
                 self.guidance_layer_name = layer_name
                 self.guidance_selection.setCurrentText(self.guidance_layer_name)
-                self.guided_mode = True
             else:
                 self.segmentation_image_layer_selection.addItem(layer_name)
                 self.cur_shapes_layer = self.viewer.layers[layer_name]
@@ -1429,8 +1427,8 @@ class OrganoidAnalyzerWidget(QWidget):
                 if item_id >= 0:
                     self.guidance_selection.removeItem(item_id)
                 if removed_name == self.guidance_layer_name:
-                    self.guided_mode = False
                     self.guidance_layer_name = None
+                    self.guidance_selection.setCurrentText("None")
             else:
                 item_id = self.segmentation_image_layer_selection.findText(removed_name)
                 self.segmentation_image_layer_selection.removeItem(item_id)
@@ -1554,10 +1552,8 @@ class OrganoidAnalyzerWidget(QWidget):
         Callback for when the guidance selection changes.
         """
         if self.guidance_selection.currentText() == 'None':
-            self.guided_mode = False
             self.guidance_layer_name = None
         else:
-            self.guided_mode = True
             self.guidance_layer_name = self.guidance_selection.currentText()
 
     def _setup_output_widget(self):
@@ -1712,13 +1708,13 @@ class OrganoidAnalyzerWidget(QWidget):
         custom_btn = QPushButton("Add custom labels")
         custom_btn.clicked.connect(self._on_custom_labels_click)
         custom_btn.setStyleSheet("border: 0px")
-        detection_guidance_checkbox = QCheckBox("Detection guidance")
-        detection_guidance_checkbox.setChecked(False)
-        detection_guidance_checkbox.stateChanged.connect(self._on_detection_guidance_checkbox_changed)
+        self.detection_guidance_checkbox = QCheckBox("Detection guidance")
+        self.detection_guidance_checkbox.setChecked(False)
+        self.detection_guidance_checkbox.stateChanged.connect(self._on_detection_guidance_checkbox_changed)
         hbox_custom.addStretch(1)
         hbox_custom.addWidget(custom_btn)
         hbox_custom.addSpacing(15)
-        hbox_custom.addWidget(detection_guidance_checkbox)
+        hbox_custom.addWidget(self.detection_guidance_checkbox)
         hbox_custom.addStretch(1)
         vbox.addLayout(hbox_custom)
         
