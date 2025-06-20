@@ -405,7 +405,7 @@ class NumberAnnotationDialogue(AnnotationDialogue):
         validator.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
         validator.setNotation(QDoubleValidator.StandardNotation)
         self.default_value_edit.setValidator(validator)
-        self.default_value_edit.setText(self.default_value)
+        self.default_value_edit.setText(str(self.default_value))
         hbox.addWidget(self.default_value_edit)
         layout.addLayout(hbox)
         
