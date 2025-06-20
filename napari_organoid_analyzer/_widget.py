@@ -20,6 +20,7 @@ from napari_organoid_analyzer._utils import (
     validate_bboxes,
     get_timelapse_name
 )
+from napari_organoid_analyzer._widgets.annotation import get_annotation_dialogue
 
 
 import numpy as np
@@ -52,6 +53,7 @@ from qtpy.QtWidgets import (
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer import _utils as utils
 from napari_organoid_analyzer import settings
+from napari_organoid_analyzer import session
 from napari_organoid_analyzer._widgets.dialogues import ConfirmUpload, ConfirmSamUpload, ExportDialog, SignalDialog, SignalChannelDialog
 import torch
 import pandas as pd
@@ -62,6 +64,7 @@ import cv2
 import warnings
 warnings.filterwarnings("ignore")
 
+ANNOTATION_TYPES = ['Text', 'Ruler', 'Objects / Boxes', 'Classes', 'Number']
 
 class OrganoidAnalyzerWidget(QWidget):
     '''
@@ -120,6 +123,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # models to the model dict
         settings.init()
         utils.add_local_models()
+        session.load_cached_settings()
         self.model_id = 2 # yolov3
         self.model_name = list(settings.MODELS.keys())[self.model_id]
         
@@ -164,11 +168,14 @@ class OrganoidAnalyzerWidget(QWidget):
         self.tab_widget = QTabWidget()
         self.configuration_tab = QWidget()
         self.detection_data_tab = QWidget()
+        self.annotation_tab = QWidget()
 
         # Add tabs to the tab widget
         self.tab_widget.addTab(self.configuration_tab, "Configuration")
         self.tab_widget.addTab(self.detection_data_tab, "Detection data")
+        self.tab_widget.addTab(self.annotation_tab, "Add Annotation")
         self.tab_widget.setTabEnabled(1, False)  # Initially disable the "Detection data" tab
+        self.tab_widget.setTabEnabled(2, True)  # Always enable the "Add Annotation" tab
 
         # Set up the layout for the configuration tab
         self.configuration_tab.setLayout(QVBoxLayout())
@@ -183,6 +190,12 @@ class OrganoidAnalyzerWidget(QWidget):
         self.detection_data_tree.setHeaderLabels(["Detections", "Properties"])
         self.detection_data_tab.layout().addWidget(self.detection_data_tree)
 
+        # Set up the layout for the add annotation tab
+        self.annotation_tab.setLayout(QVBoxLayout())
+        self.annotation_tab.layout().addWidget(self._setup_labels_for_annotation_widget())
+        self.annotation_tab.layout().addWidget(self._setup_create_annotation_feature_widget())
+        self.annotation_tab.layout().addWidget(self._setup_continue_annotation_widget())
+
         # Add export button below the tree view
         export_button = QPushButton("Export Selected")
         export_button.clicked.connect(self._export_detection_data_to_csv)
@@ -196,10 +209,12 @@ class OrganoidAnalyzerWidget(QWidget):
         self.organoiDL = OrganoiDL(self.handle_progress)
 
         # get already opened layers
-        self.image_layer_names = self._get_layer_names()
-        if len(self.image_layer_names)>0: self._update_added_image(self.image_layer_names)
-        self.shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
-        if len(self.shape_layer_names)>0: self._update_added_shapes(self.shape_layer_names)
+        image_layer_names = self._get_layer_names()  # Must not be self.image_layer_names, otherwise it will recursively add the same image again and again.
+        if len(image_layer_names)>0: 
+            self._update_added_image(image_layer_names)
+        shape_layer_names = self._get_layer_names(layer_type=layers.Shapes)
+        if len(shape_layer_names)>0: 
+            self._update_added_shapes(shape_layer_names)
         # and watch for newly added images or shapes
         self.viewer.layers.events.inserted.connect(self._added_layer)
         self.viewer.layers.events.removed.connect(self._removed_layer)
@@ -370,6 +385,9 @@ class OrganoidAnalyzerWidget(QWidget):
         
         self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
         
+        # Most likely action after loading cached detections is to select/delete/change some of them.
+        self.viewer.layers[labels_layer_name].mode = 'select'
+        
         return True
 
     def _sel_layer_changed(self, event):
@@ -457,7 +475,7 @@ class OrganoidAnalyzerWidget(QWidget):
             layout.addWidget(remember_checkbox)
             msg_box.setCheckBox(remember_checkbox)
 
-            reply = msg_box.exec_()
+            reply = msg_box.exec()
             remember_choice = remember_checkbox.isChecked()
 
             # Save the user's choice if they selected "Remember"
@@ -539,8 +557,9 @@ class OrganoidAnalyzerWidget(QWidget):
                                                                shape_type='rectangle',
                                                                edge_width=12) # warning generated here
                             
-            # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
-            self.viewer.layers[labels_layer_name].current_edge_width = 1
+        # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
+        self.viewer.layers[labels_layer_name].current_edge_width = 1
+        self.viewer.layers[labels_layer_name].mode = 'select'
         self.stored_confidences[labels_layer_name] = self.confidence
         self.stored_diameters[labels_layer_name] = self.min_diameter
         self._update_cur_shapes_layer_label_and_checkbox()
@@ -549,7 +568,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # check if SAM model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.SAM_MODEL["filename"]): 
             confirm_window = ConfirmSamUpload(self)
-            confirm_window.exec_()
+            confirm_window.exec()
             # if user clicks cancel return doing nothing 
             if confirm_window.result() != QDialog.Accepted: return
             # otherwise download model and display progress in progress bar
@@ -575,7 +594,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # check if model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[self.model_name]["filename"]): 
             confirm_window = ConfirmUpload(self, self.model_name)
-            confirm_window.exec_()
+            confirm_window.exec()
             # if user clicks cancel return doing nothing 
             if confirm_window.result() != QDialog.Accepted: return
             # otherwise download model and display progress in progress bar
@@ -712,7 +731,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     continue
                 if len(signal_shape) >= len(image_shape) and len(signal_shape) >= 3:
                     channel_dialog = SignalChannelDialog(self, signal_shape[-1], signal_layer_name)
-                    if channel_dialog.exec_() != QDialog.Accepted:
+                    if channel_dialog.exec() != QDialog.Accepted:
                         show_warning(f"No channel selected for signal {signal_layer_name} Skipping...")
                         continue
                     idx = channel_dialog.get_channel_idx()
@@ -1078,7 +1097,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # called when the user hits the 'browse' button to select a model
         fd = QFileDialog()
         fd.setFileMode(QFileDialog.AnyFile)
-        if fd.exec_():
+        if fd.exec():
             model_path = fd.selectedFiles()[0]
         import shutil
         shutil.copy2(model_path, settings.MODELS_DIR)
@@ -1254,7 +1273,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 msg_box.setWindowTitle("Create Custom Labels for Timelapse")
                 msg_box.setText("Do you want to create custom labels for all frames in the timelapse?")
                 msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-                reply = msg_box.exec_()
+                reply = msg_box.exec()
                 if reply == QMessageBox.Yes:
                     # Create a labels layer for each frame
                     for i in range(img_data.shape[0]):
@@ -1343,6 +1362,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     shape_type='rectangle',
                     edge_width=12
             )
+        self.cur_shapes_layer.mode = 'add_rectangle'
 
     def _update_added_image(self, added_items):
         """
@@ -1407,6 +1427,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 self.guidance_selection.setCurrentText(self.guidance_layer_name)
             else:
                 self.segmentation_image_layer_selection.addItem(layer_name)
+                self.annotation_image_layer_selection.addItem(layer_name)
                 self.cur_shapes_layer = self.viewer.layers[layer_name]
                 self._update_num_organoids(len(self.cur_shapes_layer.data))
                 self.cur_shapes_layer.events.data.connect(self.shapes_event_handler)
@@ -1432,6 +1453,8 @@ class OrganoidAnalyzerWidget(QWidget):
             else:
                 item_id = self.segmentation_image_layer_selection.findText(removed_name)
                 self.segmentation_image_layer_selection.removeItem(item_id)
+                item_id = self.annotation_image_layer_selection.findText(removed_name)
+                self.annotation_image_layer_selection.removeItem(item_id)
                 self.label2im.pop(removed_name, None)
                 self.stored_confidences.pop(removed_name, None)
                 self.stored_diameters.pop(removed_name, None)
@@ -2085,8 +2108,11 @@ class OrganoidAnalyzerWidget(QWidget):
         Get a list of layer names of a given layer type.
         """
         layer_names = [layer.name for layer in self.viewer.layers if type(layer) == layer_type]
-        if layer_names: return [] + layer_names
-        else: return []
+        return layer_names
+        # if layer_names: 
+        #     return [] + layer_names
+        # else: 
+        #     return []
 
     def _on_labels_layer_change(self):
         """
@@ -2097,8 +2123,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if self.label_layer_name.startswith("TL_Frame"):
             self.run_for_timelapse_checkbox.setVisible(True)
         else:
-            self.run_for_timelapse_checkbox.setVisible(False)
-
+            self.run_for_timelapse_checkbox.setVisible(False)    
         self.signals_list.setRowCount(0)
         if self.label_layer_name in self.label2im and self.label2im[self.label_layer_name] in self.im2signal:
             image_name = self.label2im[self.label_layer_name]
@@ -2124,6 +2149,17 @@ class OrganoidAnalyzerWidget(QWidget):
         self.im2signal[image_name].pop(signal_name, None)
         self._on_labels_layer_change()
 
+    def _on_annotation_labels_layer_change(self):
+        """
+        Called when user changes layer of labels used for segmentation
+        """
+        self.label_layer_name = self.annotation_image_layer_selection.currentText()
+        # Show or hide the "Run for entire timelapse" checkbox based on layer name
+        if self.label_layer_name.startswith("TL_Frame"):
+            self.annotation_run_for_timelapse_checkbox.setVisible(True)
+        else:
+            self.annotation_run_for_timelapse_checkbox.setVisible(False)
+
     def _on_layer_name_change(self, event):
         """
         Called whether user changes the name of any of the layers.
@@ -2131,8 +2167,10 @@ class OrganoidAnalyzerWidget(QWidget):
         
         # Update selectors for image and shapes layers
         self.segmentation_image_layer_selection.clear()
+        self.annotation_image_layer_selection.clear()
         for name in self._get_layer_names(layer_type=layers.Shapes): 
             self.segmentation_image_layer_selection.addItem(name)
+            self.annotation_image_layer_selection.addItem(name)
 
         self.image_layer_selection.clear()
         for name in self._get_layer_names(layer_type=layers.Image):
@@ -2195,10 +2233,226 @@ class OrganoidAnalyzerWidget(QWidget):
         else:
             show_warning("Export canceled.")
 
+    def _setup_labels_for_annotation_widget(self):
+        """
+        Sets up the GUI part for selecting which labels to use for annotation.
+
+        Contains a 
+        - select labels layer dropdown
+        - apply to whole timelapse checkbox
+        - apply on tracked organoids checkbox
+        """
+        widget = QGroupBox('Select labels layer')
+        vbox = QVBoxLayout()
+
+        # Select labels layer
+        hbox_config = QHBoxLayout()
+        self.annotation_image_layer_selection = QComboBox()
+        if self.image_layer_names is not None:
+            for name in self.image_layer_names:
+                if not name.startswith('Segmentation-') and not name.startswith('TL_'):
+                    self.annotation_image_layer_selection.addItem(name)
+        self.annotation_image_layer_selection.currentIndexChanged.connect(self._on_annotation_labels_layer_change)
+        hbox_config.addWidget(self.annotation_image_layer_selection, 2)
+        vbox.addLayout(hbox_config)
+        
+        # Run for entire timelapse checkbox
+        self.annotation_run_for_timelapse_checkbox = QCheckBox("Run for entire timelapse")
+        self.annotation_run_for_timelapse_checkbox.setVisible(False)
+        self.annotation_run_for_timelapse_checkbox.setChecked(False)
+        vbox.addWidget(self.annotation_run_for_timelapse_checkbox)
+        
+        widget.setLayout(vbox)
+        return widget
+        
+    def _setup_create_annotation_feature_widget(self):
+        """
+        Sets up the GUI part for configuring the annotation feature.
+
+        Contains a 
+        - select annotation type dropdown: Should support Text, Ruler, Objects, 
+            Number, Classes
+        - feature name text field: This feature name must be unique and not 
+            exist in the data or in the created features already.
+        - start annotating button
+        """
+        widget = QGroupBox('Create annotation')
+        vbox = QVBoxLayout()
+
+        #Annotation name
+        hbox_config0 = QHBoxLayout()
+        annotation_name_desc = QLabel('Annotation name: ', self)
+        self.new_annotation_name = QLineEdit()
+        hbox_config0.addWidget(annotation_name_desc, 1)
+        hbox_config0.addWidget(self.new_annotation_name, 4)
+        vbox.addLayout(hbox_config0)
+        
+        # Feature name
+        hbox_config1 = QHBoxLayout()
+        feature_name_desc = QLabel('Feature name: ', self)
+        self.new_feature_name = QLineEdit()
+        hbox_config1.addWidget(feature_name_desc, 1)
+        hbox_config1.addWidget(self.new_feature_name, 4)
+        vbox.addLayout(hbox_config1)
+
+        # Feature config
+        hbox_config2 = QHBoxLayout()
+        feature_type_desc = QLabel('Type: ', self)
+        feature_type_desc.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.new_feature_type_selection = QComboBox()
+        for ft in ANNOTATION_TYPES:
+            self.new_feature_type_selection.addItem(ft)
+
+        start_annotation = QPushButton('Start annotating')
+        start_annotation.clicked.connect(self._on_create_annotation_feature)
+        start_annotation.setStyleSheet("border: 0px")
+
+        hbox_config2.addWidget(feature_type_desc, 1)
+        hbox_config2.addWidget(self.new_feature_type_selection, 3)
+        hbox_config2.addWidget(start_annotation, 1)
+        hbox_config2.addSpacing(15)
+        hbox_config2.addStretch(1)   
+        vbox.addLayout(hbox_config2)     
+        widget.setLayout(vbox)
+        return widget
+
+    def _setup_continue_annotation_widget(self):
+        """
+        Sets up the GUI part for continuing previously defined annotation.
+
+        Contains a select feature dropdown, delete feature, and continue annotating button.
+        """
+        widget = QGroupBox('Resume annotation')
+        vbox = QVBoxLayout()
+        
+        # Feature name
+        hbox_config1 = QHBoxLayout()
+        feature_name_desc = QLabel('Annotation name: ', self)
+        self.resume_feature_name = QComboBox()
+        for ft in self._load_annotation_features():
+            self.resume_feature_name.addItem(ft)
+        
+        hbox_config1.addWidget(feature_name_desc, 1)
+        hbox_config1.addWidget(self.resume_feature_name, 4)
+        vbox.addLayout(hbox_config1)
+
+        # Feature action
+        hbox_config2 = QHBoxLayout()
+        delete_feature = QPushButton('Delete')
+        delete_feature.clicked.connect(self._on_delete_annotation_feature)
+        delete_feature.setStyleSheet("border: 0px")
+
+        hbox_config2 = QHBoxLayout()
+        start_annotation = QPushButton('Continue annotating')
+        start_annotation.clicked.connect(self._on_continue_annotation)
+        start_annotation.setStyleSheet("border: 0px")
+
+        hbox_config2.addWidget(delete_feature, 2)
+        hbox_config2.addWidget(start_annotation, 2)
+        # hbox_config2.addSpacing(15)
+        # hbox_config2.addStretch(1)   
+        vbox.addLayout(hbox_config2) 
+
+        widget.setLayout(vbox)
+        return widget
+
+    def _on_create_annotation_feature(self):
+        annotation_name = self.new_annotation_name.text()
+        feature = {
+            annotation_name: {
+                'property_name': self.new_feature_name.text(),
+                'type': self.new_feature_type_selection.currentText(),
+            }
+        }
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+        if annotation_name in annotation_features:
+            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name or delete existing annotation")
+        
+        # Add annotation feature to cached setting
+        annotation_features.update(feature)
+        session.set_session_var('annotation_features', annotation_features)
+
+        # Add annotation feature to resume annotation dropdown
+        self.resume_feature_name.addItem(annotation_name)
+
+        self.annotate(feature)
+
+    def _load_annotation_features(self):
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+
+        # Return list of existing features
+        return list(annotation_features.keys())
+    
+    def _on_delete_annotation_feature(self):
+        feature_name = self.resume_feature_name.currentText()
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+
+        # Delete feature from cached settings
+        annotation_features.pop(feature_name, None)
+        session.set_session_var('annotation_features', annotation_features)
+
+        # Delete feature from the resume annotation dropdown
+        item_id = self.resume_feature_name.findText(feature_name)
+        self.resume_feature_name.removeItem(item_id)
+    
+    def _on_continue_annotation(self):
+        feature_name = self.resume_feature_name.currentText()
+        annotation_features = session.SESSION_VARS.get('annotation_features', {})
+        feature = annotation_features.get(feature_name, None)
+        if feature is None:
+            raise RuntimeError(f"Feature with name {feature_name} was not found.")
+        if not feature['type'] in ANNOTATION_TYPES:
+            raise RuntimeError(f"Feature with name {feature_name} has unknown annotation type {feature['type']}")
+        self.annotate({feature_name: feature})
+
+    def annotate(self, feature):
+        """Starts the annotation loop with custom annotation widgets depending on the feature type."""
+        annotation_name = next(iter(feature))
+        annotation_data = feature[annotation_name]
+        annotation_data.update({"annotation_name": annotation_name})
+        
+        label_layer_name = self.annotation_image_layer_selection.currentText()
+        if not label_layer_name:
+            raise ValueError("No label layer selected for annotation. Please select a label layer and try again.")
+        if label_layer_name not in self.viewer.layers or label_layer_name not in self.label2im:
+            raise ValueError(f"Label layer {label_layer_name} not found in viewer or doesn't have corresponding image.")
+        labels_layer = self.viewer.layers[label_layer_name]
+        
+        image_layer_name = self.label2im[label_layer_name]
+        if image_layer_name not in self.viewer.layers:
+            raise ValueError(f"Image layer {image_layer_name} not found in viewer")
+        
+        if label_layer_name.startswith("TL_Frame"):
+            frame_idx = int(self.label_layer_name.split('_')[1][5:])
+            image = self.viewer.layers[image_layer_name].data[frame_idx]
+        else:
+            image = self.viewer.layers[image_layer_name].data
+        bboxes = labels_layer.data
+        bboxes = convert_boxes_from_napari_view(bboxes).numpy()
+        properties = labels_layer.properties.copy()
+
+        for property_name, property in properties.items():
+            if len(property) != bboxes.shape[0]:
+                raise RuntimeError(f"Number of properties for propertsave_annotay {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
+            
+        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
+        if annotation_dialogue.exec() != QDialog.Accepted:
+            show_warning("Annotation cancelled. But your changes have been saved.")
+            return
+        new_annotations = annotation_dialogue.get_annotations()
+        if annotation_data['property_name'] in properties:
+            feature_data = properties[annotation_data['property_name']]
+        else:
+            feature_data = ["" for i in range(len(properties['box_id']))]
+        for box_id, value in new_annotations.items():
+            feature_data[int(box_id)] = value
+        properties.update({annotation_data['property_name']: feature_data})
+        labels_layer.properties = properties
+
     def _on_add_signal(self):
         signal_dialog = SignalDialog(self, self._get_layer_names())
 
-        if signal_dialog.exec_() != QDialog.Accepted:
+        if signal_dialog.exec() != QDialog.Accepted:
             show_warning("Signal import cancelled")
             return
         
@@ -2212,8 +2466,7 @@ class OrganoidAnalyzerWidget(QWidget):
             curr_layers = self._get_layer_names()
             new_layers = [name for name in curr_layers if not name in old_layers]
             if len(new_layers) != 1:
-                show_error(f"Error importing signal. New layers encountered {new_layers} (1 expected)")
-                return
+                raise RuntimeError(f"Error importing signal. New layers encountered {new_layers} (1 expected)")
             signal_uri = new_layers[0]
         image_shape = self.viewer.layers[image_name].data.shape
         signal_shape = self.viewer.layers[signal_uri].data.shape
@@ -2222,8 +2475,7 @@ class OrganoidAnalyzerWidget(QWidget):
             (len(signal_shape) == len(image_shape) and signal_shape[:-1] == image_shape[:-1]) or
             (len(signal_shape) == 3 and len(image_shape) == 2 and signal_shape[:-1] == image_shape)
         ):
-            show_error(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Signal not added")
-            return
+            raise RuntimeError(f"Signal dimensions of {signal_shape} do not correspond to image dimensions {image_shape}. Signal not added")
         if not image_name in self.im2signal:
             self.im2signal[image_name] = {signal_name: signal_uri}
         else:

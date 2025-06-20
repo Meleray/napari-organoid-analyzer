@@ -27,6 +27,9 @@ def init():
     global CACHE_DIR
     CACHE_DIR = Path.home() / ".cache/napari-organoid-analyzer"
     
+    global SETTINGS_DIR
+    SETTINGS_DIR = CACHE_DIR / "settings"
+    
     global MODELS_DIR
     MODELS_DIR = CACHE_DIR / "models"
 
@@ -35,6 +38,7 @@ def init():
 
     DETECTIONS_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
 
     global MODEL_TYPE
     MODEL_TYPE = '.pth'
