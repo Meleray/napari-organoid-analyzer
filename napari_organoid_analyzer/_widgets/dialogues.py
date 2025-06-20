@@ -2,6 +2,7 @@ from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabe
 from qtpy.QtCore import Qt
 from napari_organoid_analyzer import settings
 from datetime import datetime
+from napari_organoid_analyzer import session
 
 
 class ConfirmUpload(QDialog):
@@ -71,6 +72,7 @@ class SignalDialog(QDialog):
         layout = QVBoxLayout()
 
         stacked_layout = QStackedLayout()
+
         signal_image_layout = QHBoxLayout()
         signal_image_layout.addWidget(QLabel("Selected signal layer:"), 2)
         self.signal_image_selector = QComboBox()
@@ -195,6 +197,7 @@ class ExportDialog(QDialog):
         path_layout = QHBoxLayout()
         path_layout.addWidget(QLabel("Export to folder:"))
         self.path_input = QLineEdit()
+        self.path_input.setText(session.SESSION_VARS.get('export_folder', ""))
         path_layout.addWidget(self.path_input, 1)
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_folder)
@@ -247,6 +250,7 @@ class ExportDialog(QDialog):
         
         feature_layout.addStretch()
         self.feature_selection_widget.setLayout(feature_layout)
+        self.feature_selection_widget.setVisible(True)
         bottom_layout.addWidget(self.feature_selection_widget)
         layout.addLayout(bottom_layout)
         
@@ -263,9 +267,10 @@ class ExportDialog(QDialog):
         self.setLayout(layout)
     
     def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", session.SESSION_VARS['export_folder'])
         if folder:
             self.path_input.setText(folder)
+            self.parent().set_session_var('export_folder', folder)
     
     def _toggle_feature_selection(self, state):
         self.feature_selection_widget.setVisible(state == Qt.Checked)
