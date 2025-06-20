@@ -478,7 +478,7 @@ class OrganoidAnalyzerWidget(QWidget):
             layout.addWidget(remember_checkbox)
             msg_box.setCheckBox(remember_checkbox)
 
-            reply = msg_box.exec_()
+            reply = msg_box.exec()
             remember_choice = remember_checkbox.isChecked()
 
             # Save the user's choice if they selected "Remember"
@@ -571,7 +571,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # check if SAM model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.SAM_MODEL["filename"]): 
             confirm_window = ConfirmSamUpload(self)
-            confirm_window.exec_()
+            confirm_window.exec()
             # if user clicks cancel return doing nothing 
             if confirm_window.result() != QDialog.Accepted: return
             # otherwise download model and display progress in progress bar
@@ -597,7 +597,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # check if model exists locally and if not ask user if it's ok to download
         if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[self.model_name]["filename"]): 
             confirm_window = ConfirmUpload(self, self.model_name)
-            confirm_window.exec_()
+            confirm_window.exec()
             # if user clicks cancel return doing nothing 
             if confirm_window.result() != QDialog.Accepted: return
             # otherwise download model and display progress in progress bar
@@ -734,7 +734,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     continue
                 if len(signal_shape) >= len(image_shape):
                     channel_dialog = SignalChannelDialog(self, signal_shape[-1], signal_layer_name)
-                    if channel_dialog.exec_() != QDialog.Accepted:
+                    if channel_dialog.exec() != QDialog.Accepted:
                         show_warning(f"No channel selected for signal {signal_layer_name} Skipping...")
                         continue
                     idx = channel_dialog.get_channel_idx()
@@ -858,7 +858,7 @@ class OrganoidAnalyzerWidget(QWidget):
         
         # Open the export dialog
         export_dialog = ExportDialog(self, available_features)
-        if export_dialog.exec_() != QDialog.Accepted:
+        if export_dialog.exec() != QDialog.Accepted:
             show_warning("Export canceled.")
             return
         
@@ -1003,7 +1003,7 @@ class OrganoidAnalyzerWidget(QWidget):
         # called when the user hits the 'browse' button to select a model
         fd = QFileDialog()
         fd.setFileMode(QFileDialog.AnyFile)
-        if fd.exec_():
+        if fd.exec():
             model_path = fd.selectedFiles()[0]
         import shutil
         shutil.copy2(model_path, settings.MODELS_DIR)
@@ -1191,7 +1191,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 msg_box.setWindowTitle("Create Custom Labels for Timelapse")
                 msg_box.setText("Do you want to create custom labels for all frames in the timelapse?")
                 msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-                reply = msg_box.exec_()
+                reply = msg_box.exec()
                 if reply == QMessageBox.Yes:
                     # Create a labels layer for each frame
                     for i in range(img_data.shape[0]):
@@ -2301,9 +2301,8 @@ class OrganoidAnalyzerWidget(QWidget):
         annotation_name = self.new_annotation_name.text()
         feature = {
             annotation_name: {
-                'name': self.new_feature_name.text(),
+                'property_name': self.new_feature_name.text(),
                 'type': self.new_feature_type_selection.currentText(),
-                'data': {}
             }
         }
         annotation_features = session.SESSION_VARS.get('annotation_features', {})
@@ -2350,12 +2349,8 @@ class OrganoidAnalyzerWidget(QWidget):
     def annotate(self, feature):
         """Starts the annotation loop with custom annotation widgets depending on the feature type."""
         annotation_name = next(iter(feature))
-        annotation_data = {
-            "annotation_name": annotation_name,
-            "property_name": feature[annotation_name]['name'],
-            "type": feature[annotation_name]['type'],
-            "data": feature[annotation_name]['data']
-        }
+        annotation_data = feature[annotation_name]
+        annotation_data.update({"annotation_name": annotation_name})
         
         label_layer_name = self.annotation_image_layer_selection.currentText()
         if not label_layer_name:
@@ -2368,7 +2363,11 @@ class OrganoidAnalyzerWidget(QWidget):
         if image_layer_name not in self.viewer.layers:
             raise ValueError(f"Image layer {image_layer_name} not found in viewer")
         
-        image = self.viewer.layers[image_layer_name].data
+        if label_layer_name.startswith("TL_Frame"):
+            frame_idx = int(self.label_layer_name.split('_')[1][5:])
+            image = self.viewer.layers[image_layer_name].data[frame_idx]
+        else:
+            image = self.viewer.layers[image_layer_name].data
         bboxes = labels_layer.data
         bboxes = convert_boxes_from_napari_view(bboxes).numpy()
         properties = labels_layer.properties.copy()
@@ -2377,19 +2376,24 @@ class OrganoidAnalyzerWidget(QWidget):
             if len(property) != bboxes.shape[0]:
                 raise RuntimeError(f"Number of properties for propertsave_annotay {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
             
-        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data)
-        if annotation_dialogue.exec_() != QDialog.Accepted:
+        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
+        if annotation_dialogue.exec() != QDialog.Accepted:
             show_warning("Annotation cancelled. But your changes have been saved.")
             return
         new_annotations = annotation_dialogue.get_annotations()
-        new_annotations = [new_annotations[str(box_id)] for box_id in properties['box_id']]
-        properties.update({annotation_data['property_name']: new_annotations})
+        if annotation_data['property_name'] in properties:
+            feature_data = properties[annotation_data['property_name']]
+        else:
+            feature_data = ["" for i in range(len(properties['box_id']))]
+        for box_id, value in new_annotations.items():
+            feature_data[int(box_id)] = value
+        properties.update({annotation_data['property_name']: feature_data})
         labels_layer.properties = properties
 
     def _on_add_signal(self):
         signal_dialog = SignalDialog(self, self._get_layer_names())
 
-        if signal_dialog.exec_() != QDialog.Accepted:
+        if signal_dialog.exec() != QDialog.Accepted:
             show_warning("Signal import cancelled")
             return
         
