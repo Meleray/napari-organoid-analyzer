@@ -2385,8 +2385,10 @@ class OrganoidAnalyzerWidget(QWidget):
             feature_data = properties[annotation_data['property_name']]
         else:
             feature_data = ["" for i in range(len(properties['box_id']))]
+        cur_box_ids = properties['box_id']
         for box_id, value in new_annotations.items():
-            feature_data[int(box_id)] = value
+            arr_id = np.where(cur_box_ids == int(box_id))[0][0]
+            feature_data[arr_id] = value
         properties.update({annotation_data['property_name']: feature_data})
         labels_layer.properties = properties
 
