@@ -2090,16 +2090,16 @@ class OrganoidAnalyzerWidget(QWidget):
         self.im2signal[image_name].pop(signal_name, None)
         self._on_labels_layer_change()
 
-    def _on_annotation_labels_layer_change(self):
-        """
-        Called when user changes layer of labels used for segmentation
-        """
-        self.label_layer_name = self.annotation_image_layer_selection.currentText()
-        # Show or hide the "Run for entire timelapse" checkbox based on layer name
-        if self.label_layer_name.startswith("TL_Frame"):
-            self.annotation_run_for_timelapse_checkbox.setVisible(True)
-        else:
-            self.annotation_run_for_timelapse_checkbox.setVisible(False)
+    # def _on_annotation_labels_layer_change(self):
+    #     """
+    #     Called when user changes layer of labels used for segmentation
+    #     """
+    #     self.label_layer_name = self.annotation_image_layer_selection.currentText()
+    #     # Show or hide the "Run for entire timelapse" checkbox based on layer name
+    #     if self.label_layer_name.startswith("TL_Frame"):
+    #         self.annotation_run_for_timelapse_checkbox.setVisible(True)
+    #     else:
+    #         self.annotation_run_for_timelapse_checkbox.setVisible(False)
 
     def _on_layer_name_change(self, event):
         """
@@ -2189,11 +2189,6 @@ class OrganoidAnalyzerWidget(QWidget):
         # Select labels layer
         hbox_config = QHBoxLayout()
         self.annotation_image_layer_selection = QComboBox()
-        if self.image_layer_names is not None:
-            for name in self.image_layer_names:
-                if not name.startswith('Segmentation-') and not name.startswith('TL_'):
-                    self.annotation_image_layer_selection.addItem(name)
-        self.annotation_image_layer_selection.currentIndexChanged.connect(self._on_annotation_labels_layer_change)
         hbox_config.addWidget(self.annotation_image_layer_selection, 2)
         vbox.addLayout(hbox_config)
         
@@ -2219,14 +2214,6 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         widget = QGroupBox('Create annotation')
         vbox = QVBoxLayout()
-
-        #Annotation name
-        hbox_config0 = QHBoxLayout()
-        annotation_name_desc = QLabel('Annotation name: ', self)
-        self.new_annotation_name = QLineEdit()
-        hbox_config0.addWidget(annotation_name_desc, 1)
-        hbox_config0.addWidget(self.new_annotation_name, 4)
-        vbox.addLayout(hbox_config0)
         
         # Feature name
         hbox_config1 = QHBoxLayout()
@@ -2298,7 +2285,7 @@ class OrganoidAnalyzerWidget(QWidget):
         return widget
 
     def _on_create_annotation_feature(self):
-        annotation_name = self.new_annotation_name.text()
+        annotation_name = f"{self.new_feature_name.text()}_{self.annotation_image_layer_selection.currentText()}"
         feature = {
             annotation_name: {
                 'property_name': self.new_feature_name.text(),
