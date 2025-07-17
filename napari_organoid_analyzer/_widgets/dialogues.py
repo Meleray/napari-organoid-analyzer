@@ -211,21 +211,21 @@ class ExportDialog(QDialog):
         options_layout = QVBoxLayout()
         
         # Checkboxes for export options
-        self.export_bboxes = QCheckBox("Bounding boxes (JSON)")
+        self.export_bboxes = QCheckBox("Layer data (JSON)")
         self.export_bboxes.setChecked(True)
-        self.export_instance_masks = QCheckBox("Instance masks (NPY)")
+        self.export_instance_masks = QCheckBox("Instance masks as polygons (JSON)")
         self.export_instance_masks.setChecked(True)
-        self.export_collated_mask = QCheckBox("Collated mask (NPY)")
+        self.export_collated_mask = QCheckBox("Collated mask (NPY))")
         self.export_collated_mask.setChecked(True)
         self.export_features = QCheckBox("Features (CSV)")
         self.export_features.setChecked(True)
         self.export_features.stateChanged.connect(self._toggle_feature_selection)
         
         options_layout.addWidget(self.export_bboxes)
+        options_layout.addWidget(self.export_features)
         if self.masks_available:
             options_layout.addWidget(self.export_instance_masks)
             options_layout.addWidget(self.export_collated_mask)
-        options_layout.addWidget(self.export_features)
         
         # Bottom part with options on left and feature selection on right
         bottom_layout = QHBoxLayout()
@@ -242,11 +242,6 @@ class ExportDialog(QDialog):
             checkbox.setChecked(True)  # Default checked
             self.feature_checkboxes[feature] = checkbox
             feature_layout.addWidget(checkbox)
-        
-        checkbox_bbox = QCheckBox("Bounding box")
-        checkbox_bbox.setChecked(True)
-        self.feature_checkboxes['Bounding box'] = checkbox_bbox
-        feature_layout.addWidget(checkbox_bbox)
         
         feature_layout.addStretch()
         self.feature_selection_widget.setLayout(feature_layout)
@@ -267,10 +262,10 @@ class ExportDialog(QDialog):
         self.setLayout(layout)
     
     def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", session.SESSION_VARS['export_folder'])
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", session.SESSION_VARS.get('export_folder', ""))
         if folder:
             self.path_input.setText(folder)
-            self.parent().set_session_var('export_folder', folder)
+            session.set_session_var('export_folder', folder)
     
     def _toggle_feature_selection(self, state):
         self.feature_selection_widget.setVisible(state == Qt.Checked)

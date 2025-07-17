@@ -243,7 +243,7 @@ class TextAnnotationDialogue(AnnotationDialogue):
                             get_error_dialog(f"Invalid range {token}")
                             return
                         for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['box_id']:
+                            if not curr_id in self.layer_properties['bbox_id']:
                                 get_error_dialog(f"ID {curr_id} not found in labels")
                                 return
                             self.annotated_ids.add(curr_id)
@@ -254,7 +254,7 @@ class TextAnnotationDialogue(AnnotationDialogue):
                 else:
                     try:
                         curr_id = int(token)
-                        if not curr_id in self.layer_properties['box_id']:
+                        if not curr_id in self.layer_properties['bbox_id']:
                             get_error_dialog(f"ID {curr_id} not found in labels")
                             return
                     except ValueError:
@@ -262,7 +262,7 @@ class TextAnnotationDialogue(AnnotationDialogue):
                         return 
                     self.annotated_ids.add(curr_id)  
         else:
-            self.annotated_ids = set(self.layer_properties['box_id'])
+            self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         for box_id in self.annotated_ids:
@@ -281,7 +281,7 @@ class TextAnnotationDialogue(AnnotationDialogue):
     def update_display(self):
         """Update displayed bounding box"""
         box_id = self.annotated_ids[self.current_idx]
-        layer_data_id = np.where(self.layer_properties['box_id'] == box_id)[0][0]
+        layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
         
         h, w = self.image.height(), self.image.width()
@@ -535,7 +535,7 @@ class NumberAnnotationDialogue(AnnotationDialogue):
                             get_error_dialog(f"Invalid range {token}")
                             return
                         for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['box_id']:
+                            if not curr_id in self.layer_properties['bbox_id']:
                                 get_error_dialog(f"ID {curr_id} not found in labels")
                                 return
                             self.annotated_ids.add(curr_id)
@@ -546,7 +546,7 @@ class NumberAnnotationDialogue(AnnotationDialogue):
                 else:
                     try:
                         curr_id = int(token)
-                        if not curr_id in self.layer_properties['box_id']:
+                        if not curr_id in self.layer_properties['bbox_id']:
                             get_error_dialog(f"ID {curr_id} not found in labels")
                             return
                     except ValueError:
@@ -554,7 +554,7 @@ class NumberAnnotationDialogue(AnnotationDialogue):
                         return 
                     self.annotated_ids.add(curr_id)  
         else:
-            self.annotated_ids = set(self.layer_properties['box_id'])
+            self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: float(val) for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         for box_id in self.annotated_ids:
@@ -571,7 +571,7 @@ class NumberAnnotationDialogue(AnnotationDialogue):
     def update_display(self):
         """Update displayed bounding box"""
         box_id = self.annotated_ids[self.current_idx]
-        layer_data_id = np.where(self.layer_properties['box_id'] == box_id)[0][0]
+        layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
         
         h, w = self.image.height(), self.image.width()
@@ -966,7 +966,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
                             get_error_dialog(f"Invalid range {token}")
                             return
                         for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['box_id']:
+                            if not curr_id in self.layer_properties['bbox_id']:
                                 get_error_dialog(f"ID {curr_id} not found in labels")
                                 return
                             self.annotated_ids.add(curr_id)
@@ -977,7 +977,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
                 else:
                     try:
                         curr_id = int(token)
-                        if not curr_id in self.layer_properties['box_id']:
+                        if not curr_id in self.layer_properties['bbox_id']:
                             get_error_dialog(f"ID {curr_id} not found in labels")
                             return
                     except ValueError:
@@ -985,7 +985,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
                         return 
                     self.annotated_ids.add(curr_id)  
         else:
-            self.annotated_ids = set(self.layer_properties['box_id'])
+            self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         self.annotated_ids = list(self.annotated_ids)
@@ -1000,7 +1000,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
     def update_display(self):
         """Update displayed bounding box"""
         box_id = self.annotated_ids[self.current_idx]
-        layer_data_id = np.where(self.layer_properties['box_id'] == box_id)[0][0]
+        layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
         
         h, w = self.image.height(), self.image.width()
@@ -1316,7 +1316,7 @@ class ClassAnnotationDialogue(AnnotationDialogue):
                             get_error_dialog(f"Invalid range {token}")
                             return
                         for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['box_id']:
+                            if not curr_id in self.layer_properties['bbox_id']:
                                 get_error_dialog(f"ID {curr_id} not found in labels")
                                 return
                             self.annotated_ids.add(curr_id)
@@ -1327,7 +1327,7 @@ class ClassAnnotationDialogue(AnnotationDialogue):
                 else:
                     try:
                         curr_id = int(token)
-                        if not curr_id in self.layer_properties['box_id']:
+                        if not curr_id in self.layer_properties['bbox_id']:
                             get_error_dialog(f"ID {curr_id} not found in labels")
                             return
                     except ValueError:
@@ -1335,7 +1335,7 @@ class ClassAnnotationDialogue(AnnotationDialogue):
                         return 
                     self.annotated_ids.add(curr_id)  
         else:
-            self.annotated_ids = set(self.layer_properties['box_id'])
+            self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: list(val) for key, val in self.annotations.items() if int(key) in self.annotated_ids}
 
@@ -1350,7 +1350,7 @@ class ClassAnnotationDialogue(AnnotationDialogue):
         """Update displayed bounding box"""
         self.clear_class_selectors()
         box_id = self.annotated_ids[self.current_idx]
-        layer_data_id = np.where(self.layer_properties['box_id'] == box_id)[0][0]
+        layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
         
         h, w = self.image.height(), self.image.width()
@@ -1787,7 +1787,7 @@ class BboxAnnotationWidget(AnnotationDialogue):
                             get_error_dialog(f"Invalid range {token}")
                             return
                         for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['box_id']:
+                            if not curr_id in self.layer_properties['bbox_id']:
                                 get_error_dialog(f"ID {curr_id} not found in labels")
                                 return
                             self.annotated_ids.add(curr_id)
@@ -1798,7 +1798,7 @@ class BboxAnnotationWidget(AnnotationDialogue):
                 else:
                     try:
                         curr_id = int(token)
-                        if not curr_id in self.layer_properties['box_id']:
+                        if not curr_id in self.layer_properties['bbox_id']:
                             get_error_dialog(f"ID {curr_id} not found in labels")
                             return
                     except ValueError:
@@ -1806,7 +1806,7 @@ class BboxAnnotationWidget(AnnotationDialogue):
                         return 
                     self.annotated_ids.add(curr_id)  
         else:
-            self.annotated_ids = set(self.layer_properties['box_id'])
+            self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         self.annotated_ids = list(self.annotated_ids)
@@ -1821,7 +1821,7 @@ class BboxAnnotationWidget(AnnotationDialogue):
     def update_display(self):
         """Update displayed bounding box"""
         box_id = self.annotated_ids[self.current_idx]
-        layer_data_id = np.where(self.layer_properties['box_id'] == box_id)[0][0]
+        layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
         
         h, w = self.image.height(), self.image.width()
