@@ -74,3 +74,6 @@ def init():
     global TEXT_COLOR
     TEXT_COLOR = [1.0, 0, 0, 1.0]  # Red for text labels
 
+    global DENSITY_K_NEIGHBORS
+    DENSITY_K_NEIGHBORS = 2
+

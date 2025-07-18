@@ -676,27 +676,55 @@ def get_length(x1, y1, x2, y2):
     dy = abs(y1 - y2)
     return math.sqrt(dx*dx+dy*dy)
 
+def get_poly_line_length(line):
+    """Calculate the length of a line segment"""
+    if len(line) < 2:
+        return 0.0
+    total_length = 0.0
+    for i in range(1, len(line)):
+        if not isinstance(line[i], (list, tuple)) or len(line[i]) != 2:
+            raise ValueError("Line points must be lists or tuples of two elements (y, x).")
+        x1, y1 = line[i-1]
+        x2, y2 = line[i]
+        total_length += get_length(x1, y1, x2, y2)
+    return total_length
+
+def get_poly_lines_data(lines):
+    lengths = [get_poly_line_length(line) for line in lines]
+    total_length = sum(lengths)
+    average_length = total_length / len(lengths) if lengths else 0.0
+    count = len(lines)
+    return total_length, average_length, count
+
 class RulerImageLabel(QLabel):
-    """Custom QLabel for ruler annotation tool"""
+    """Custom QLabel for multi-segment lines annotation tool"""
     def __init__(self, dialogue_class, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumSize(300, 300)
         self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+        self.setMouseTracking(True) 
         self._pixmap = None
         self._original_pixmap = None
-        self.start_point = None
-        self.end_point = None
+        self.curr_point = None
         self.drawing = False
         self.line_color = QColor(255, 0, 0)
         self.line_width = 2
         self.dialogue_class = dialogue_class
-        
+        self.lines = []
+        self.cur_snippet_coords = None
+
+    def set_snippet_coords(self, coords):
+        """Set global coordinates of the current image snippet's top-left corner"""
+        if not isinstance(coords, (list, tuple)) or len(coords) != 2:
+            raise ValueError("Snippet coordinates must be a list or tuple of two elements (y, x).")
+        self.cur_snippet_coords = coords
+
     def setPixmap(self, pixmap):
         """Store the original pixmap and update the display"""
         self._original_pixmap = pixmap
         self._pixmap = pixmap.copy() if pixmap else None
-        self.clear_line()
+        self.clear_image()
         super().setPixmap(self.scaled_pixmap())
         
     def scaled_pixmap(self):
@@ -714,73 +742,109 @@ class RulerImageLabel(QLabel):
         super().resizeEvent(event)
         
     def mousePressEvent(self, event):
-        """Start drawing a new line"""
+        """Line drawing controls"""
         if event.button() == Qt.LeftButton:
-            self.start_point = self.scaled_to_original(self.mapFromGlobal(event.globalPos()))
-            self.end_point = self.start_point
-            self.drawing = True
-            self.update_line()
-            
-    def mouseMoveEvent(self, event):
-        """Update line while dragging"""
-        if self.drawing:
-            self.end_point = self.scaled_to_original(self.mapFromGlobal(event.globalPos()))
-            self.update_line()
-            
-    def mouseReleaseEvent(self, event):
-        """Finish drawing line"""
-        if event.button() == Qt.LeftButton and self.drawing:
-            self.end_point = self.scaled_to_original(self.mapFromGlobal(event.globalPos()))
+            self.cur_point = self.scaled_to_original(self.mapFromGlobal(event.globalPos()))
+            if not self.drawing:
+                self.drawing = True
+                x = self.cur_point.x()
+                y = self.cur_point.y()
+                self.lines.append([[x, y], [x, y]])
+            else:
+                x = self.cur_point.x()
+                y = self.cur_point.y()
+                self.lines[-1][-1] = [x, y]
+                self.lines[-1].append([x, y])
+        elif event.button() == Qt.RightButton:
+            self.lines[-1].pop()
+            if len(self.lines[-1]) == 1:
+                self.lines.pop()
             self.drawing = False
-            self.update_line()
+        self.update_lines()
+ 
+    def mouseMoveEvent(self, event):
+        """Update last line segment when moving cursor"""
+        if self.drawing:
+            self.cur_point = self.scaled_to_original(self.mapFromGlobal(event.globalPos()))
+            x = self.cur_point.x()
+            y = self.cur_point.y()
+            self.lines[-1][-1] = [x, y]
+            self.update_lines()
 
-    def get_line(self):
-        if self.start_point is None or self.end_point is None:
-            return None
-        return [self.start_point.x(), self.start_point.y(), self.end_point.x(), self.end_point.y()]
+    def get_lines(self):
+        if self.cur_snippet_coords is None:
+            raise ValueError("Snippet coordinates must be set before getting bounding boxes.")
+        global_lines = copy.deepcopy(self.lines)
+        for line in global_lines:
+            for point in line:
+                point[0] += self.cur_snippet_coords[0]
+                point[1] += self.cur_snippet_coords[1]
+                tmp = point[0]
+                point[0] = point[1]
+                point[1] = tmp
+        return global_lines
     
-    def set_line(self, line):
-        self.start_point = QPoint(line[0], line[1])
-        self.end_point = QPoint(line[2], line[3])
-        self.update_line()
+    def set_lines(self, lines):
+        if self.cur_snippet_coords is None:
+            raise ValueError("Snippet coordinates must be set before setting bounding boxes.")
+        self.lines = []
+        for line in lines:
+            for point in line:
+                tmp = point[0]
+                point[0] = point[1]
+                point[1] = tmp
+                point[0] -= self.cur_snippet_coords[0]
+                point[1] -= self.cur_snippet_coords[1]
+            self.lines.append(line)
+        self.update_lines()
             
-    def clear_line(self):
+    def clear_image(self):
         """Clear the current ruler line"""
-        self.start_point = None
-        self.end_point = None
-        self.drawing = False
+        self.lines = []
+        self.update_lines()
+
+    def clear_last_segment(self):
+        """Clear last drawn line segment"""
+        if len(self.lines):
+            if self.drawing:
+                self.lines[-1] = self.lines[-1][:-2]
+                self.lines[-1].append(self.lines[-1][-1])
+                if len(self.lines[-1]) <= 2:
+                    self.lines.pop()
+                    self.drawing = False
+            else:
+                self.lines[-1] = self.lines[-1][:-1]
+                if len(self.lines[-1]) <= 1:
+                    self.lines.pop()
+                    self.drawing = False
+            self.update_lines()
+            
+    def update_lines(self):
+        """Redraw lines on the image"""
         if self._original_pixmap:
             self._pixmap = self._original_pixmap.copy()
-            super().setPixmap(self.scaled_pixmap())
-            
-    def update_line(self):
-        """Update the display with the current line together with point coordinates"""
-        if self.start_point is None:
-            self.dialogue_class.start_label.setText("Start point: None")
-        else:
-            coord_x = self.start_point.x() + self.dialogue_class.cur_snippet_coords[0]
-            coord_y = self.start_point.y() + self.dialogue_class.cur_snippet_coords[1]
-            self.dialogue_class.start_label.setText(f"Start point: ({coord_y}, {coord_x})")
-
-        if self.end_point is None:
-            self.dialogue_class.end_label.setText("End point: None")
-        else:
-            coord_x = self.end_point.x() + self.dialogue_class.cur_snippet_coords[0]
-            coord_y = self.end_point.y() + self.dialogue_class.cur_snippet_coords[1]
-            self.dialogue_class.end_label.setText(f"End point: ({coord_y}, {coord_x})")
- 
-        if self._original_pixmap and self.start_point is not None and self.end_point is not None:
-            self._pixmap = self._original_pixmap.copy()
             painter = QPainter(self._pixmap)
-            distance = get_length(self.start_point.x(), self.start_point.y(), self.end_point.x(), self.end_point.y())
-            self.dialogue_class.annotation_edit.setText(f"{distance:.4f}")
             pen = QPen(self.line_color)
             pen.setWidth(self.line_width)
             painter.setPen(pen)
-            painter.drawLine(self.start_point, self.end_point)
-            
+
+            for line in self.lines:
+                painter.drawPolyline(
+                    *[QPoint(point[0], point[1]) for point in line]
+                )      
             painter.end()
             super().setPixmap(self.scaled_pixmap())
+            global_lines = self.get_lines()
+            total_length, average_length, count = get_poly_lines_data(global_lines)
+            if len(global_lines):
+                curr_point = global_lines[-1][-1]
+                self.dialogue_class.coord_label.setText(f"Current coordinates: {curr_point[0]}, {curr_point[1]}")
+            else:
+                self.dialogue_class.coord_label.setText("Current coordinates: None")
+            self.dialogue_class.annotation_edit.setText(str(global_lines))
+            self.dialogue_class.annotation_total_length.setText(str(total_length))
+            self.dialogue_class.annotation_average_length.setText(str(average_length))
+            self.dialogue_class.annotation_count.setText(str(count))
 
     def original_to_scaled(self, point):
         """Convert a point from original image coordinates to label coordinates"""
@@ -811,8 +875,6 @@ class RulerImageLabel(QLabel):
 class RulerAnnotationDialogue(AnnotationDialogue):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cur_snippet_coords = None
-
     
     def _setup_start_widget(self):
         widget = QWidget()
@@ -893,27 +955,52 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         self.progress_label = QLabel("Annotation progress: ")
         layout.addWidget(self.progress_label)
 
-        self.start_label = QLabel("Start point: None")
-        self.end_label = QLabel("End point: None")
-        layout.addWidget(self.start_label)
-        layout.addWidget(self.end_label)
+        self.coord_label = QLabel("Current coordinates: None")
+        layout.addWidget(self.coord_label)
+
         
         # Annotation field
         annot_layout = QHBoxLayout()
-        annot_layout.addWidget(QLabel("Annotation (length in pixels):"))
+        annot_layout.addWidget(QLabel("Annotation (List of lines vertices):"))
         self.annotation_edit = QLineEdit()
-        validator = QDoubleValidator()
-        validator.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
-        validator.setNotation(QDoubleValidator.StandardNotation)
-        self.annotation_edit.setValidator(validator)
         self.annotation_edit.setReadOnly(True)
         self.annotation_edit.returnPressed.connect(self.show_next)
-        self.clear_btn = QPushButton("Clear Line")
-        self.clear_btn.clicked.connect(self.image_label.clear_line)
+        self.clear_btn = QPushButton("Clear all")
+        self.clear_btn.clicked.connect(self.image_label.clear_image)
+        self.clear_last_btn = QPushButton("Clear last segment")
+        self.clear_last_btn.clicked.connect(self.image_label.clear_last_segment)
         annot_layout.addWidget(self.annotation_edit)
         annot_layout.addWidget(self.clear_btn)
+        annot_layout.addWidget(self.clear_last_btn)
+
+        # Total length
+        tl_layout = QHBoxLayout()
+        tl_layout.addWidget(QLabel("Total length:"))
+        self.annotation_total_length = QLineEdit()
+        self.annotation_total_length.setReadOnly(True)
+        self.annotation_total_length.setValidator(QDoubleValidator())
+        tl_layout.addWidget(self.annotation_total_length)
+
+        # Average length
+        avg_len_layout = QHBoxLayout()
+        avg_len_layout.addWidget(QLabel("Average length:"))
+        self.annotation_average_length = QLineEdit()
+        self.annotation_average_length.setReadOnly(True)
+        self.annotation_average_length.setValidator(QDoubleValidator())
+        avg_len_layout.addWidget(self.annotation_average_length)
+
+        # Total count
+        count_layout = QHBoxLayout()
+        count_layout.addWidget(QLabel("Lines count:"))
+        self.annotation_count = QLineEdit()
+        self.annotation_count.setReadOnly(True)
+        self.annotation_count.setValidator(QDoubleValidator())
+        count_layout.addWidget(self.annotation_count)
         
         layout.addLayout(annot_layout)
+        layout.addLayout(tl_layout)
+        layout.addLayout(avg_len_layout)
+        layout.addLayout(count_layout)
         
         # Navigation buttons
         nav_layout = QHBoxLayout()
@@ -1011,7 +1098,8 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         
         # Display image snippet
         snippet = self.image.copy(y1_disp, x1_disp, y2_disp - y1_disp, x2_disp - x1_disp)
-        self.cur_snippet_coords = [y1_disp, x1_disp]
+        cur_snippet_coords = [y1_disp, x1_disp]
+        self.image_label.set_snippet_coords(cur_snippet_coords)
 
         painter = QPainter(snippet)
         pen = QPen(QColor(0, 255, 0))
@@ -1038,16 +1126,11 @@ class RulerAnnotationDialogue(AnnotationDialogue):
             
         # Set current annotation
         if str(box_id) in self.annotations:
-            old_line_coords = self.annotations[str(box_id)]
-            old_line_coords[0] -= self.cur_snippet_coords[0]
-            old_line_coords[1] -= self.cur_snippet_coords[1]
-            old_line_coords[2] -= self.cur_snippet_coords[0]
-            old_line_coords[3] -= self.cur_snippet_coords[1]
-            current_annot = get_length(*old_line_coords)
-            self.image_label.set_line(old_line_coords)
+            current_annot = self.annotations[str(box_id)]
         else:
-            current_annot = 0.0
-        self.annotation_edit.setText(f"{current_annot:.4f}")
+            current_annot = []
+        self.annotation_edit.setText(str(current_annot))
+        self.image_label.set_lines(current_annot)
         self.next_btn.setEnabled(self.current_idx < len(self.annotated_ids) - 1)
         self.progress_label.setText(f"Annotation progress: {self.current_idx + 1}/{len(self.annotated_ids)}")
     
@@ -1055,13 +1138,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         """Save current annotation to dictionary"""
         if self.current_idx >= 0:
             box_id = self.annotated_ids[self.current_idx]
-            cur_line = self.image_label.get_line()
-            if cur_line is not None:
-                cur_line[0] += self.cur_snippet_coords[0]
-                cur_line[1] += self.cur_snippet_coords[1]
-                cur_line[2] += self.cur_snippet_coords[0]
-                cur_line[3] += self.cur_snippet_coords[1]
-                self.annotations[str(box_id)] = cur_line
+            self.annotations[str(box_id)] = self.image_label.get_lines()
         
         annotation_features = session.SESSION_VARS.get('annotation_features', {})
         annotation_features[self.annotation_name] = {
@@ -1095,7 +1172,11 @@ class RulerAnnotationDialogue(AnnotationDialogue):
     
     def get_annotations(self):
         """Return the updated annotations dictionary"""
-        return {box_id: get_length(*val) for box_id, val in self.annotations.items()}
+        final_annot = {}
+        for box_id, val in self.annotations.items():
+            total_length, average_length, count = get_poly_lines_data(val)
+            final_annot[box_id] = (str(val), total_length, average_length, count)
+        return final_annot
     
     def accept(self):
         self.save_annotation()

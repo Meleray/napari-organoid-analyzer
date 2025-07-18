@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from skimage.io import imsave
 from skimage.color import rgb2gray
@@ -18,7 +18,8 @@ from napari_organoid_analyzer._utils import (
     compute_image_hash, 
     convert_boxes_to_napari_view,
     validate_bboxes,
-    get_timelapse_name
+    get_timelapse_name,
+    polygon2mask
 )
 from napari_organoid_analyzer._widgets.annotation import get_annotation_dialogue
 
@@ -312,7 +313,6 @@ class OrganoidAnalyzerWidget(QWidget):
                 'min_diameter': min_diameter
             }
             cache_data.update(self.organoiDL.storage.get(layer_name, {}))
-            print()
                 
             # Write the data to the cache file
             json.dump(cache_data, f)
@@ -748,16 +748,14 @@ class OrganoidAnalyzerWidget(QWidget):
                 if frame.shape[2] == 4:
                     frame = frame[:, :, :3]
                 frame_signal = {signal_name: signal_field[i] for signal_name, signal_field in merged_signal_data.items()}
-                masks, features, signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, frame_signal)
+                masks, signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, frame_signal)
                 final_image[i] = collate_instance_masks(masks, color=True)
                 for signal_name, signal_seg in signal_masks.items():
                     final_signal_seg[signal_name][i] = collate_instance_masks(signal_seg, color=False)
                 if len(labels_layer.properties['bbox_id']) != masks.shape[0] or len(labels_layer.properties['score']) != masks.shape[0]:
                     show_error(f"Mismatch in number of masks and labels for layer {frame_layer_name}. Features have not been updated")
                     continue
-                tmp_dict = labels_layer.properties.copy()
-                tmp_dict.update(features)
-                labels_layer.properties = tmp_dict
+                self._update_detections(frame_layer_name, image_name)
 
 
             segmentation_layer_name = f"Segmentation-{timelapse_name}"
@@ -783,7 +781,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 image_data = image_data[:, :, :3]
     
             segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-            masks, features, signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
+            masks, signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
     
             self.viewer.add_image(collate_instance_masks(masks, color=True), name=segmentation_layer_name, blending='additive')
             for signal_name, signal_mask in signal_masks.items():
@@ -792,42 +790,96 @@ class OrganoidAnalyzerWidget(QWidget):
             if len(labels_layer.properties['bbox_id']) != masks.shape[0] or len(labels_layer.properties['score']) != masks.shape[0]:
                 show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
                 return
-            tmp_dict = labels_layer.properties.copy()
-            tmp_dict.update(features)
-            labels_layer.properties = tmp_dict
+            self._update_detections(self.label_layer_name, )
     
         self._update_detection_data_tab()
         self.viewer.window._status_bar._toggle_activity_dock(False)
         show_info("Segmentation completed and added to the viewer.")
 
-    def _on_export_click(self):
+    def _on_export_layer_click(self):
         """
-        Runs when the Export button is clicked to open the export dialog
-        and handle the user's selections.
+        Is called whenever the export button is clicked.
+        Exports data from the selected label layer or from timelapse associated with the label layer.
         """
         if not self.label_layer_name:
             show_error("No label layer selected. Please select a label layer and try again.")
             return
         
-        label_layer = self.viewer.layers[self.label_layer_name]
-        if label_layer is None:
+        if not self.label_layer_name in self.viewer.layers:
             show_error(f"Layer '{self.label_layer_name}' not found in the viewer.")
+            return
+        
+        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+            if not self.label_layer_name.startswith("TL_Frame"):
+                raise RuntimeError("Timelapse export is selected, but the current layer is not a timelapse frame.")
+            timelapse_export = True
+            timelapse_name = get_timelapse_name(self.label_layer_name)
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            shapes_name = next(iter(self.timelapses[timelapse_name]))
+        else:
+            timelapse_export = False
+            shapes_name = self.label_layer_name
+        
+        self.export_data(shapes_name, timelapse_export)
+
+    def _on_export_timelapse_click(self):
+        """
+        Is called whenever the export timelapse button is clicked.
+        Exports data from all timelapse frames.
+        """
+        if not self.cur_timelapse_name in self.timelapses:
+            raise RuntimeError(f"Timelapse '{self.cur_timelapse_name}' not found.")
+        shapes_name = next(iter(self.timelapses[self.cur_timelapse_name]))
+        
+        self.export_data(shapes_name, timelapse_export=True)
+
+    def export_data(self, shapes_name, timelapse_export: bool = False):
+        """
+        Export data from the selected label layer or from timelapse associated with the label layer.
+        """
+        
+        label_layer = self.viewer.layers[shapes_name] if shapes_name in self.viewer.layers else None
+        if label_layer is None:
+            show_error(f"Layer '{shapes_name}' not found in the viewer.")
             return
         
         lengths = [len(v) for v in label_layer.properties.values()]
         if len(set(lengths)) != 1:
-            show_error("Mismatch in number of masks and labels. Please rerun the segmentation on selected layer.")
-            return
+            raise RuntimeError("Mismatch in number of masks and labels. Please rerun the segmentation on selected layer.")
         
         # Get available features from the layer properties
-        available_features = []
-        if hasattr(label_layer, 'properties') and label_layer.properties:
-            available_features = [k for k in label_layer.properties.keys()]
 
-        masks_available =  self.organoiDL.storage.get(self.label_layer_name, {}).get('detection_data', {}).get('mask', None) is not None
+        #if not timelapse_export:
+        #    timelapse_export = self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.#isChecked()
         
+        if timelapse_export:
+            timelapse_name = get_timelapse_name(label_layer.name)
+            if timelapse_name not in self.timelapses:
+                raise RuntimeError(f"Timelapse '{timelapse_name}' not found.")
+            
+            timelapse_layers = self.timelapses[timelapse_name]
+            available_features = set()
+            for layer_name in timelapse_layers:
+                if layer_name not in self.viewer.layers:
+                    show_warning(f"Layer {layer_name} not found in viewer. Skipping...")
+                    continue
+                if hasattr(self.viewer.layers[layer_name], 'properties') and self.viewer.layers[layer_name].properties:
+                    available_features.update(self.viewer.layers[layer_name].properties.keys())
+            masks_available = np.any([len(self.organoiDL.storage.get(layer_name, {}).get("segmentation_data", {})) for layer_name in timelapse_layers])
+            ids_with_masks = set()
+            for layer_name in timelapse_layers:
+                if "segmentation_data" in self.organoiDL.storage.get(layer_name, {}):
+                    ids_with_masks.update(self.organoiDL.storage[layer_name]['segmentation_data'].keys())
+            ids_with_masks = list(ids_with_masks)
+        else:
+            available_features = []
+            if hasattr(label_layer, 'properties') and label_layer.properties:
+                available_features = [k for k in label_layer.properties.keys()]
+            masks_available = len(self.organoiDL.storage.get(layer_name, {}).get("segmentation_data", {}))
+            ids_with_masks = self.organoiDL.storage[self.label_layer_name]['segmentation_data'].keys() if masks_available else []
         # Open the export dialog
-        export_dialog = ExportDialog(self, available_features, masks_available)
+        export_dialog = ExportDialog(self, available_features, masks_available, ids_with_masks)
         if export_dialog.exec_() != QDialog.Accepted:
             show_warning("Export canceled.")
             return
@@ -844,20 +896,20 @@ class OrganoidAnalyzerWidget(QWidget):
         exported_items = []
         
         # Process export based on selected options
-        if export_options['bboxes']:
-            self._export_bboxes(label_layer, export_path)
-            exported_items.append("bounding boxes")
+        if export_options['layer_data']:
+            self._export_layer_data(label_layer, export_path, timelapse_export)
+            exported_items.append("layer data")
         
         if export_options['instance_masks']:
-            self._export_instance_masks(label_layer, export_path)
+            self._export_instance_masks(label_layer, export_path, timelapse_export, export_options['selected_ids'])
             exported_items.append("instance masks")
 
         if export_options['collated_mask']:
-            self._export_collated_masks(label_layer, export_path)
+            self._export_collated_masks(label_layer, export_path, timelapse_export)
             exported_items.append("collated mask")
         
         if export_options['features']:
-            self._export_features(label_layer, export_path, selected_features)
+            self._export_features(label_layer, export_path, selected_features, timelapse_export)
             exported_items.append("features")
         
         if exported_items:
@@ -865,9 +917,9 @@ class OrganoidAnalyzerWidget(QWidget):
         else:
             show_warning("No items were selected for export.")
 
-    def _export_bboxes(self, label_layer, export_path: Path):
-        """Export bounding boxes to JSON file"""
-        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+    def _export_layer_data(self, label_layer, export_path: Path, timelapse_export):
+        """Export layer data to JSON file"""
+        if timelapse_export:
             
             if not label_layer.name.startswith("TL_Frame"):
                 raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
@@ -894,15 +946,13 @@ class OrganoidAnalyzerWidget(QWidget):
             data_json = self.organoiDL.storage[label_layer.name]
             
         # Write bbox coordinates to json
-        json_file_path = export_path / f"{self.label_layer_name}_bboxes.json"
+        json_file_path = export_path / f"{self.label_layer_name}_layer_data.json"
         utils.write_to_json(json_file_path, data_json)
 
-    # TODO: make it export binary instance masks claculated from polygons for selected ids
-    def _export_instance_masks(self, label_layer, export_path: Path):
-        """Export instance masks to NPY"""
+    def _export_instance_masks(self, label_layer, export_path: Path, timelapse_export, selected_ids=[]):
+        """Export instance masks as binary masks from storage polygons"""
 
-        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
-            
+        if timelapse_export:
             if not label_layer.name.startswith("TL_Frame"):
                 raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
             
@@ -914,39 +964,86 @@ class OrganoidAnalyzerWidget(QWidget):
             timelapse_layers = self.timelapses[timelapse_name]
             export_folder = export_path / f"instance_masks_{timelapse_name}"
             export_folder.mkdir(exist_ok=True)
+            
             for label_layer_name in timelapse_layers:
                 if not label_layer_name in self.viewer.layers:
                     raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
                 if not label_layer_name.startswith("TL_Frame"):
                     raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
-                if not label_layer_name in self.organoiDL.pred_masks:
-                    show_warning(f"No masks found for layer {label_layer_name}. Skippingl...")
+                if not label_layer_name in self.organoiDL.storage:
+                    show_warning(f"No storage data found for layer {label_layer_name}. Skipping...")
                     continue
-                instance_masks = self.organoiDL.pred_masks[label_layer_name]
+                
+                storage_data = self.organoiDL.storage[label_layer_name]
+                if 'segmentation_data' not in storage_data:
+                    show_warning(f"No segmentation data found for layer {label_layer_name}. Skipping...")
+                    continue
+                
                 frame_idx = int(label_layer_name.split('_')[1][5:])
-                box_ids = self.viewer.layers[label_layer_name].properties['bbox_id']
-                mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
-                file_path = export_folder / f"Frame_{frame_idx}"
-                np.save(file_path, mask_dict)
+                image_shape = storage_data['image_size']
+                mask_dict = {}
+                
+                for obj_id in selected_ids:
+                    if obj_id not in storage_data['segmentation_data']:
+                        continue  # Skip IDs that don't exist in this frame
+                    
+                    obj_masks = {}
+                    segmentation_obj_data = storage_data['segmentation_data'][obj_id]
+                    
+                    for mask_key, polygon_data in segmentation_obj_data.items():
+                        if polygon_data:
+                            polygon = json.loads(polygon_data)
+                            if polygon:  # Check if polygon is not empty
+                                binary_mask = polygon2mask(polygon, image_shape)
+                                obj_masks[mask_key] = binary_mask
+                    
+                    if obj_masks:  # Only add to mask_dict if we have masks
+                        mask_dict[obj_id] = obj_masks
+                
+                if mask_dict:
+                    file_path = export_folder / f"Frame_{frame_idx}"
+                    np.save(file_path, mask_dict)
         else:
-        
-            instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
-            if len(instance_masks) == 0:
-                show_warning("No masks found for segmentation. Skipping mask export.")
+            if self.label_layer_name not in self.organoiDL.storage:
+                raise RuntimeError(f"No storage data found for layer {self.label_layer_name}.")
+            
+            storage_data = self.organoiDL.storage[self.label_layer_name]
+            if 'segmentation_data' not in storage_data:
+                show_warning("No segmentation data found. Skipping mask export.")
                 return
-        
-            # Export instance masks
-            box_ids = label_layer.properties['bbox_id']
-            mask_dict = {int(box_ids[i]): instance_masks[i] for i in range(len(instance_masks))}
+            
+            image_shape = storage_data['image_size']
+            mask_dict = {}
+            
+            for obj_id in selected_ids:
+                if obj_id not in storage_data['segmentation_data']:
+                    continue  # Skip IDs that don't exist
+                
+                obj_masks = {}
+                segmentation_obj_data = storage_data['segmentation_data'][obj_id]
+                
+                # Export all masks (regular mask and signal masks) for this object
+                for mask_key, polygon_data in segmentation_obj_data.items():
+                    if polygon_data:
+                        polygon = json.loads(polygon_data)
+                        if polygon:  # Check if polygon is not empty
+                            binary_mask = polygon2mask(polygon, image_shape)
+                            obj_masks[mask_key] = binary_mask
+                
+                if obj_masks:  # Only add to mask_dict if we have masks
+                    mask_dict[obj_id] = obj_masks
+            
+            if not mask_dict:
+                show_warning("No masks found for selected IDs. Skipping mask export.")
+                return
             
             instance_mask_file_path = export_path / f"{self.label_layer_name}_instance_masks.npy"
             np.save(instance_mask_file_path, mask_dict)
 
-    # Calculate collated mask from storage polygons
-    def _export_collated_masks(self, label_layer, export_path: Path):
-        """Export collated mask to NPY"""
-        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
-            
+    def _export_collated_masks(self, label_layer, export_path: Path, timelapse_export):
+        """Export collated masks to NPY"""
+
+        if timelapse_export:
             if not label_layer.name.startswith("TL_Frame"):
                 raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
             
@@ -958,36 +1055,94 @@ class OrganoidAnalyzerWidget(QWidget):
             timelapse_layers = self.timelapses[timelapse_name]
             export_folder = export_path / f"collated_masks_{timelapse_name}"
             export_folder.mkdir(exist_ok=True)
+            
             for label_layer_name in timelapse_layers:
                 if not label_layer_name in self.viewer.layers:
                     raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
                 if not label_layer_name.startswith("TL_Frame"):
                     raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
-                if not label_layer_name in self.organoiDL.pred_masks:
-                    show_warning(f"No masks found for layer {label_layer_name}. Skippingl...")
+                if not label_layer_name in self.organoiDL.storage:
+                    show_warning(f"No storage data found for layer {label_layer_name}. Skipping...")
                     continue
-                instance_masks = self.organoiDL.pred_masks[label_layer_name]
+                
+                storage_data = self.organoiDL.storage[label_layer_name]
+                if 'segmentation_data' not in storage_data:
+                    show_warning(f"No segmentation data found for layer {label_layer_name}. Skipping...")
+                    continue
+                
                 frame_idx = int(label_layer_name.split('_')[1][5:])
-                collated_mask = collate_instance_masks(instance_masks)
-                file_path = export_folder / f"Frame_{frame_idx}"
-                np.save(file_path, collated_mask)
-        else: 
-        
-            instance_masks = self.organoiDL.pred_masks[self.label_layer_name]
-            if len(instance_masks) == 0:
+                image_shape = storage_data['image_size']
+                
+                # Find all unique mask types across all objects
+                mask_types = set()
+                for obj_id, seg_data in storage_data['segmentation_data'].items():
+                    mask_types.update(seg_data.keys())
+                
+                # Create a collated mask for each mask type
+                collated_masks = {}
+                for mask_type in mask_types:
+
+                    collated_mask = np.zeros(image_shape, dtype=np.uint8)
+                    
+                    # Add all instances of this mask type to the collated mask
+                    for obj_id, seg_data in storage_data['segmentation_data'].items():
+                        if mask_type in seg_data and seg_data[mask_type]:
+                            polygon = json.loads(seg_data[mask_type])
+                            if polygon:
+                                binary_mask = polygon2mask(polygon, image_shape)
+                                collated_mask[binary_mask > 0] = 1
+                    
+                    if np.any(collated_mask):
+                        collated_masks[mask_type] = collated_mask
+                
+                if collated_masks:
+                    file_path = export_folder / f"Frame_{frame_idx}"
+                    np.save(file_path, collated_masks)
+        else:
+            if self.label_layer_name not in self.organoiDL.storage:
+                raise RuntimeError(f"No storage data found for layer {self.label_layer_name}.")
+            
+            storage_data = self.organoiDL.storage[self.label_layer_name]
+            if 'segmentation_data' not in storage_data:
+                show_warning("No segmentation data found. Skipping mask export.")
+                return
+            
+            image_shape = storage_data['image_size']
+            
+            # Find all unique mask types across all objects
+            mask_types = set()
+            for obj_id, seg_data in storage_data['segmentation_data'].items():
+                mask_types.update(seg_data.keys())
+            
+            # Create a collated mask for each mask type
+            collated_masks = {}
+            for mask_type in mask_types:
+
+                collated_mask = np.zeros(image_shape, dtype=np.uint8)
+                
+                # Add all instances of this mask type to the collated mask
+                for obj_id, seg_data in storage_data['segmentation_data'].items():
+                    if mask_type in seg_data and seg_data[mask_type]:
+                        polygon = json.loads(seg_data[mask_type])
+                        if polygon:
+                            binary_mask = polygon2mask(polygon, image_shape)
+                            collated_mask[binary_mask > 0] = 1
+                
+                if np.any(collated_mask):
+                    collated_masks[mask_type] = collated_mask
+            
+            if not collated_masks:
                 show_warning("No masks found for segmentation. Skipping mask export.")
                 return
 
-            collated_mask = collate_instance_masks(instance_masks)
             collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
-            np.save(collated_mask_file_path, collated_mask)
+            np.save(collated_mask_file_path, collated_masks)
 
-
-    def _export_features(self, label_layer, export_path: Path, selected_features):
+    def _export_features(self, label_layer, export_path: Path, selected_features, timelapse_export):
         """Export selected features to CSV"""
         # Extract only the selected features
         features_to_export = {}
-        if self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.isChecked():
+        if timelapse_export:
             
             if not label_layer.name.startswith("TL_Frame"):
                 raise RuntimeError("Internal error: Timelapse checkbox is checked but current layer is not a timelapse frame.")
@@ -1464,8 +1619,14 @@ class OrganoidAnalyzerWidget(QWidget):
             self.cur_shapes_layer.properties = properties
             self.organoiDL.update_bboxes_scores(self.cur_shapes_layer.name, new_bboxes, properties, image_shape)
             self._save_cache_results(self.cur_shapes_layer.name)
+            #self._update_detections(self.cur_shapes_layer.name, image_layer_name)
+            bboxes, properties = self.organoiDL.apply_params(
+                self.cur_shapes_layer.name,
+                self.stored_confidences.get(self.cur_shapes_layer.name, self.confidence),
+                self.stored_diameters.get(self.cur_shapes_layer.name, self.min_diameter)
+            )
+            self.cur_shapes_layer.properties = properties
             self._update_detection_data_tab()
-
             self.cur_shapes_layer.refresh()
             self.cur_shapes_layer.refresh_text()
 
@@ -1665,7 +1826,11 @@ class OrganoidAnalyzerWidget(QWidget):
         run_btn = QPushButton("Run Organoid Counter")
         run_btn.clicked.connect(self._on_run_click)
         run_btn.setStyleSheet("border: 0px")
+        import_btn = QPushButton("Import detections")
+        import_btn.setStyleSheet("border: 0px")
+        import_btn.clicked.connect(self._on_import_detections_click)
         hbox.addWidget(run_btn)
+        hbox.addWidget(import_btn)
         hbox.addStretch(1)
         vbox.addLayout(hbox)
 
@@ -1695,6 +1860,31 @@ class OrganoidAnalyzerWidget(QWidget):
         vbox.addLayout(cache_hbox)
         
         return vbox
+
+    def _on_import_detections_click(self):
+        """
+        Called when the Import Detections button is pressed.
+        """
+        if not self.image_layer_selection.currentText():
+            show_warning("No corresponding image layer")
+            return
+        file_path, _ = QFileDialog.getOpenFileName(self, "Import Detections", "", "JSON files (*.json)")
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r") as f:
+                detection_data = json.load(f)
+        except Exception as e:
+            show_error(f"Failed to load detections: {e}")
+            return
+        
+
+        image_layer_name = self.image_layer_selection.currentText()
+        image_data = self.viewer.layers[image_layer_name].data
+        image_layer_shape = self.viewer.layers[image_layer_name].data.shape
+        labels_layer_name = f"{image_layer_name}-Labels-Imported-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
+        self.organoiDL.storage[labels_layer_name] = detection_data
+        self._update_detections(labels_layer_name, image_layer_name)
 
     def _on_cache_checkbox_changed(self, state):
         """Called when cache checkbox is toggled"""
@@ -1827,7 +2017,7 @@ class OrganoidAnalyzerWidget(QWidget):
         run_segmentation_btn.clicked.connect(self._on_run_segmentation)
         run_segmentation_btn.setStyleSheet("border: 0px")
         export_btn = QPushButton("Export data")
-        export_btn.clicked.connect(self._on_export_click)
+        export_btn.clicked.connect(self._on_export_layer_click)
         export_btn.setStyleSheet("border: 0px")
         hbox_run.addWidget(run_segmentation_btn)
         hbox_run.addSpacing(15)
@@ -1937,8 +2127,7 @@ class OrganoidAnalyzerWidget(QWidget):
         export_timelapse_btn = QPushButton("Export Timelapse")
         delete_timelapse_btn = QPushButton("Delete timelapse")
         delete_timelapse_btn.clicked.connect(self._on_delete_timelapse)
-        # TODO
-        export_timelapse_btn.clicked.connect(self._on_create_labelled_timelapse)
+        export_timelapse_btn.clicked.connect(self._on_export_timelapse_click)
         hbox_buttons.addWidget(export_timelapse_btn)
         hbox_buttons.addWidget(delete_timelapse_btn)
         timelapse_vbox.addLayout(hbox_buttons)
@@ -2485,15 +2674,32 @@ class OrganoidAnalyzerWidget(QWidget):
             show_warning("Annotation cancelled. But your changes have been saved.")
             return
         new_annotations = annotation_dialogue.get_annotations()
-        if annotation_data['property_name'] in properties:
-            feature_data = properties[annotation_data['property_name']]
+        if annotation_data['type'] == "Ruler":
+            property_names = [f"{annotation_data['property_name']}_line", 
+                              f"{annotation_data['property_name']}_total_length",
+                              f"{annotation_data['property_name']}_average_length",
+                              f"{annotation_data['property_name']}_count"
+                              ]
+            for idx, property_name in enumerate(property_names):
+                if property_name in properties:
+                    feature_data = properties[property_name]
+                else:
+                    feature_data = ["" for i in range(len(properties['bbox_id']))]
+                cur_box_ids = properties['bbox_id']
+                for box_id, value in new_annotations.items():
+                    arr_id = np.where(cur_box_ids == int(box_id))[0][0]
+                    feature_data[arr_id] = value[idx]
+                    properties.update({property_name: feature_data})
         else:
-            feature_data = ["" for i in range(len(properties['bbox_id']))]
-        cur_box_ids = properties['bbox_id']
-        for box_id, value in new_annotations.items():
-            arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-            feature_data[arr_id] = value
-        properties.update({annotation_data['property_name']: feature_data})
+            if annotation_data['property_name'] in properties:
+                feature_data = properties[annotation_data['property_name']]
+            else:
+                feature_data = ["" for i in range(len(properties['bbox_id']))]
+            cur_box_ids = properties['bbox_id']
+            for box_id, value in new_annotations.items():
+                arr_id = np.where(cur_box_ids == int(box_id))[0][0]
+                feature_data[arr_id] = value
+                properties.update({annotation_data['property_name']: feature_data})
         labels_layer.properties = properties
 
     def _on_add_signal(self):

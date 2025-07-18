@@ -21,7 +21,11 @@ import trackpy as tp
 import pandas as pd
 import json
 import copy
+import scipy
+from scipy.spatial.distance import cdist
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
+
+DENSITY_K_NEIGHBORS = 5  # You can adjust this value as needed
 
 class OrganoiDL():
     '''
@@ -66,11 +70,15 @@ class OrganoiDL():
         #       id: {
         #           "bbox": [x1, y1, x2, y2], 
         #           "score": float,
-        #           "mask": [polygon coordinates], # polygon coordinates of the mask
-        #           "{signal_name}_mask": [polygon coordinates], # polygon coordinates of the mask
         #           ---- Other features ----
         #      }
         #   },
+        #   "segmentation_data": {
+        #      "id": {
+        #           "mask": [polygon coordinates], # polygon coordinates of the mask
+        #           "{signal_name}_mask": [polygon coordinates], # polygon coordinates of the signal mask
+        #       }
+        #   }
         #   "image_size": [H, W],
         #   "displayed_ids": [list of IDs that are currently displayed in the layer as str],
         #   "next_id": int (next ID to be attributed to a new box)
@@ -267,10 +275,35 @@ class OrganoiDL():
             'score': pred_scores[i].item(),
         } for i in range(bboxes.size(0))}
 
+        centers = []
+        bbox_ids = []
+        for bbox_id, det in detection_data.items():
+            bbox = json.loads(det['bbox'])
+            y1, x1, y2, x2 = bbox
+            center = ((y1 + y2) / 2, (x1 + x2) / 2)
+            centers.append(center)
+            bbox_ids.append(bbox_id)
+
+        centers = np.array(centers)
+        dist_matrix = cdist(centers, centers)
+
+        for i, bbox_id in enumerate(bbox_ids):
+            # Exclude self (distance zero)
+            dists = np.delete(dist_matrix[i], i)
+            if len(dists) >= DENSITY_K_NEIGHBORS:
+                closest = np.partition(dists, DENSITY_K_NEIGHBORS-1)[:DENSITY_K_NEIGHBORS]
+                avg_dist = float(np.mean(closest))
+            elif len(dists) > 0:
+                avg_dist = float(np.mean(dists))
+            else:
+                avg_dist = 0.0
+            detection_data[bbox_id]['local_density'] = avg_dist
+
         self.storage[shapes_name] = {
             'detection_data': detection_data,
             'image_size': list(img.shape[:2]),
             'next_id': bboxes.size(0) + 1,
+            'segmentation_data': {},
         }
 
     def _fill_default_data(self, shapes_name):
@@ -340,10 +373,11 @@ class OrganoiDL():
         features = []
         for idx in range(len(showed_ids)):
             curr_id = showed_ids[idx]
-            self.storage[shapes_name]['detection_data'][curr_id]['mask'] = json.dumps(mask2polygon(pred_mask[idx]))
+            self.storage[shapes_name]['segmentation_data'][curr_id] = {}
+            self.storage[shapes_name]['segmentation_data'][curr_id]['mask'] = json.dumps(mask2polygon(pred_mask[idx]))
             if len(signal_masks) > 0:
                 for signal_name in signal_masks.keys():
-                    self.storage[shapes_name]['detection_data'][curr_id][f'{signal_name}_mask'] = json.dumps(mask2polygon(signal_masks[signal_name][idx]))
+                    self.storage[shapes_name]['segmentation_data'][curr_id][f'{signal_name}_mask'] = json.dumps(mask2polygon(signal_masks[signal_name][idx]))
             curr_features = self._compute_features(
                 pred_mask[idx], 
                 curr_id, 
@@ -352,8 +386,7 @@ class OrganoiDL():
             self.storage[shapes_name]['detection_data'][curr_id].update(curr_features)
             features.append(curr_features)
         self._fill_default_data(shapes_name)
-        features = {key: [feature[key] for feature in features] for key in features[0]}
-        return pred_mask, features, signal_masks
+        return pred_mask, signal_masks
     
     def _compute_features(self, mask, org_id, signal_data):
         """
@@ -391,7 +424,7 @@ class OrganoiDL():
                 f"{signal_name} area (pixel units)": float(total_signal_area),
                 f"{signal_name} mean intensity": float(signal_mean_intensity),
                 f"{signal_name} total intensity": float(signal_total_intensity),
-                f"{signal_name} components": int(len(signal_contours))
+                #f"{signal_name} components": int(len(signal_contours))
             })
         return features
 
@@ -479,6 +512,8 @@ class OrganoiDL():
         if old_id not in self.storage[shape_name]['detection_data']:
             raise ValueError(f"Old ID {old_id} not found in shape {shape_name} detection data.")
         self.storage[shape_name]['detection_data'][new_id] = self.storage[shape_name]['detection_data'].pop(old_id)
+        if old_id in self.storage[shape_name]['segmentation_data']:
+            self.storage[shape_name]['segmentation_data'][new_id] = self.storage[shape_name]['segmentation_data'].pop(old_id)
         displayed_ids = self.storage[shape_name]['displayed_ids']
         if old_id in displayed_ids:
             displayed_ids[displayed_ids.index(old_id)] = new_id
@@ -567,5 +602,7 @@ class OrganoiDL():
                 if not particle_id in self.storage[cur_shape_name]['detection_data']:
                     prev_shape_name = frame_to_shape[prev_frame_idx]
                     self.storage[cur_shape_name]['detection_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['detection_data'][particle_id])
+                    if particle_id in self.storage[prev_shape_name]['segmentation_data']:
+                        self.storage[cur_shape_name]['segmentation_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['segmentation_data'][particle_id])
                     self.storage[cur_shape_name]['next_id'] = max(self.storage[cur_shape_name]['next_id'], particle_id + 1)
             self._fill_default_data(cur_shape_name)
