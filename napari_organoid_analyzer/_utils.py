@@ -10,6 +10,7 @@ import json
 import csv
 from skimage.transform import rescale
 from skimage.color import gray2rgb
+from skimage.draw import polygon as skimage_polygon
 import hashlib
 import cv2
 
@@ -229,9 +230,9 @@ def convert_boxes_to_napari_view(pred_bboxes):
     """ The bboxes are converted from tensors in model output form to a form which can be visualised in the napari viewer """
     if pred_bboxes is None: return []
     new_boxes = []
-    for idx in range(pred_bboxes.shape[0]):
+    for idx in range(len(pred_bboxes)):
         # convert to numpy and take coordinates 
-        x1_real, y1_real, x2_real, y2_real = pred_bboxes[idx].tolist()
+        x1_real, y1_real, x2_real, y2_real = pred_bboxes[idx]
         # append to a list in form napari exects
         new_boxes.append(np.array([[x1_real, y1_real],
                                 [x1_real, y2_real],
@@ -251,7 +252,7 @@ def convert_boxes_from_napari_view(pred_bboxes):
         # convert to tensor and append to list
         new_boxes.append(torch.Tensor([x1, y1, x2, y2]))
     if len(new_boxes) > 0: new_boxes = torch.stack(new_boxes)
-    return torch.Tensor(new_boxes)
+    return new_boxes.tolist() if len(new_boxes) > 0 else []
 
 def apply_normalization(img):
     """ Normalize image"""
@@ -329,3 +330,33 @@ def validate_bboxes(bboxes, image_shape):
 def get_timelapse_name(name):
     """ Get the name of the timelapse from the napari layer name """
     return '_'.join(name.split('_')[2:])
+
+def mask2polygon(mask):
+    """
+    Convert a binary mask to a polygon (sequence of vertices).
+    Returns a list of (x, y) tuples for the largest contour.
+    """
+    mask = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return []
+    largest_contour = max(contours, key=cv2.contourArea)
+    polygon = largest_contour.squeeze()
+    if polygon.ndim == 1:
+        polygon = polygon[np.newaxis, :]
+    return polygon.tolist()
+
+def polygon2mask(polygon, shape):
+    """
+    Convert a polygon (sequence of vertices) and image shape to a binary mask.
+    polygon: list or array of (x, y) or [ [x1, y1], [x2, y2], ... ]
+    shape: (height, width)
+    Returns a binary mask of the given shape.
+    """
+    polygon = np.array(polygon)
+    if polygon.ndim != 2 or polygon.shape[1] != 2:
+        raise ValueError("Polygon must be a sequence of (x, y) points.")
+    rr, cc = skimage_polygon(polygon[:, 1], polygon[:, 0], shape)
+    mask = np.zeros(shape, dtype=np.uint8)
+    mask[rr, cc] = 1
+    return mask

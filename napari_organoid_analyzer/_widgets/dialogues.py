@@ -1,4 +1,4 @@
-from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QCheckBox, QLineEdit, QFileDialog, QComboBox, QStackedLayout
+from qtpy.QtWidgets import QDialog, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QCheckBox, QLineEdit, QFileDialog, QComboBox, QStackedLayout, QMessageBox
 from qtpy.QtCore import Qt
 from napari_organoid_analyzer import settings
 from datetime import datetime
@@ -183,11 +183,12 @@ class ExportDialog(QDialog):
     """
     Dialog for selecting export options
     """
-    def __init__(self, parent, available_features, masks_avilable):
+    def __init__(self, parent, available_features, masks_avilable, layer_ids):
         super().__init__(parent)
         self.setWindowTitle("Export Options")
         self.setMinimumWidth(500)
         self.masks_available = masks_avilable
+        self.layer_ids = layer_ids
         
         # Main layout
         layout = QVBoxLayout()
@@ -205,27 +206,41 @@ class ExportDialog(QDialog):
         layout.addLayout(path_layout)
         
         # What to export
-        layout.addWidget(QLabel("Select what to export:"))
+        warning_label = QLabel("WARNING: It is recommended to export full instance masks only for small subset of detections, as they take up a lot of space. For exporting them as polygons use layer data export option.")
+        warning_label.setWordWrap(True)
+        layout.addWidget(warning_label)
+        layout.addWidget(QLabel("Select what:"))
         
         # Export options layout (left side of the bottom part)
         options_layout = QVBoxLayout()
         
         # Checkboxes for export options
-        self.export_bboxes = QCheckBox("Bounding boxes (JSON)")
-        self.export_bboxes.setChecked(True)
+        self.export_layer_data = QCheckBox("Layer data (JSON)")
+        self.export_layer_data.setChecked(True)
         self.export_instance_masks = QCheckBox("Instance masks (NPY)")
         self.export_instance_masks.setChecked(True)
-        self.export_collated_mask = QCheckBox("Collated mask (NPY)")
+        self.export_collated_mask = QCheckBox("Collated mask (NPY))")
         self.export_collated_mask.setChecked(True)
         self.export_features = QCheckBox("Features (CSV)")
         self.export_features.setChecked(True)
         self.export_features.stateChanged.connect(self._toggle_feature_selection)
         
-        options_layout.addWidget(self.export_bboxes)
+        options_layout.addWidget(self.export_layer_data)
+        options_layout.addWidget(self.export_features)
         if self.masks_available:
             options_layout.addWidget(self.export_instance_masks)
+            # Selected IDs input for instance masks
+            ids_layout = QHBoxLayout()
+            ids_layout.addWidget(QLabel("Selected IDs:"))
+            self.selected_ids_input = QLineEdit()
+            self.selected_ids_input.setPlaceholderText("e.g., 1,2,5-10 (empty = none)")
+            ids_layout.addWidget(self.selected_ids_input)
+            options_layout.addLayout(ids_layout)
+            
+            # Connect checkbox state to enable/disable the input
+            self.export_instance_masks.stateChanged.connect(self._toggle_ids_input)
+            
             options_layout.addWidget(self.export_collated_mask)
-        options_layout.addWidget(self.export_features)
         
         # Bottom part with options on left and feature selection on right
         bottom_layout = QHBoxLayout()
@@ -243,11 +258,6 @@ class ExportDialog(QDialog):
             self.feature_checkboxes[feature] = checkbox
             feature_layout.addWidget(checkbox)
         
-        checkbox_bbox = QCheckBox("Bounding box")
-        checkbox_bbox.setChecked(True)
-        self.feature_checkboxes['Bounding box'] = checkbox_bbox
-        feature_layout.addWidget(checkbox_bbox)
-        
         feature_layout.addStretch()
         self.feature_selection_widget.setLayout(feature_layout)
         self.feature_selection_widget.setVisible(True)
@@ -257,7 +267,7 @@ class ExportDialog(QDialog):
         # Buttons
         button_layout = QHBoxLayout()
         export_button = QPushButton("Export")
-        export_button.clicked.connect(self.accept)
+        export_button.clicked.connect(self._validate_and_accept)
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(export_button)
@@ -267,24 +277,92 @@ class ExportDialog(QDialog):
         self.setLayout(layout)
     
     def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", session.SESSION_VARS['export_folder'])
+        folder = QFileDialog.getExistingDirectory(self, "Select Export Folder", session.SESSION_VARS.get('export_folder', ""))
         if folder:
             self.path_input.setText(folder)
-            self.parent().set_session_var('export_folder', folder)
+            session.set_session_var('export_folder', folder)
     
     def _toggle_feature_selection(self, state):
         self.feature_selection_widget.setVisible(state == Qt.Checked)
+    
+    def _toggle_ids_input(self, state):
+        """Enable/disable the selected IDs input based on instance masks checkbox"""
+        self.selected_ids_input.setEnabled(state == Qt.Checked)
+    
+    def _validate_ids(self):
+        """Validate the selected IDs input and return parsed IDs or None if invalid"""
+        ids_text = self.selected_ids_input.text().strip()
+        if not ids_text:
+            return []
+        
+        selected_ids = set()
+        for token in ids_text.split(','):
+            token = token.strip()
+            if token == "":
+                QMessageBox.warning(self, "Invalid IDs", "Empty token encountered in ID list.")
+                return None
+            
+            if '-' in token:
+                range_data = token.split('-')
+                if len(range_data) != 2:
+                    QMessageBox.warning(self, "Invalid IDs", f"Invalid range format: {token}")
+                    return None
+                try:
+                    start = int(range_data[0])
+                    end = int(range_data[1])
+                    if start < 0 or end < 0 or start > end:
+                        QMessageBox.warning(self, "Invalid IDs", f"Invalid range values: {token}")
+                        return None
+                    for curr_id in range(start, end + 1):
+                        if curr_id not in self.layer_ids:
+                            print(curr_id, self.layer_ids)
+                            QMessageBox.warning(self, "Invalid IDs", f"ID {curr_id} not found in layer.")
+                            return None
+                        selected_ids.add(curr_id)
+                except ValueError:
+                    QMessageBox.warning(self, "Invalid IDs", f"Invalid range format: {token}")
+                    return None
+            else:
+                try:
+                    curr_id = int(token)
+                    if curr_id not in self.layer_ids:
+                        print(curr_id, self.layer_ids)
+                        QMessageBox.warning(self, "Invalid IDs", f"ID {curr_id} not found in layer.")
+                        return None
+                    selected_ids.add(curr_id)
+                except ValueError:
+                    QMessageBox.warning(self, "Invalid IDs", f"Invalid ID: {token}")
+                    return None
+        
+        return list(selected_ids)
+    
+    def _validate_and_accept(self):
+        """Validate inputs before accepting"""
+        if self.masks_available and self.export_instance_masks.isChecked():
+            parsed_ids = self._validate_ids()
+            if parsed_ids is None:
+                return  # Validation failed, don't close dialog
+            self.parsed_selected_ids = parsed_ids
+        else:
+            self.parsed_selected_ids = None
+        
+        self.accept()
     
     def get_export_path(self):
         return self.path_input.text()
     
     def get_export_options(self):
-        return {
-            'bboxes': self.export_bboxes.isChecked(),
+        options = {
+            'layer_data': self.export_layer_data.isChecked(),
             'instance_masks': self.masks_available and self.export_instance_masks.isChecked(),
             'collated_mask': self.masks_available and self.export_collated_mask.isChecked(),
             'features': self.export_features.isChecked()
         }
+        
+        if options['instance_masks'] and hasattr(self, 'parsed_selected_ids'):
+            options['selected_ids'] = self.parsed_selected_ids
+        
+        return options
     
     def get_selected_features(self):
         return [feature for feature, checkbox in self.feature_checkboxes.items() if checkbox.isChecked()]

@@ -12,12 +12,20 @@ import mmdet
 from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
 from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
-from napari_organoid_analyzer._utils import set_posix_windows
+from napari_organoid_analyzer._utils import set_posix_windows, polygon2mask, mask2polygon
 import matplotlib.pyplot as plt
 import cv2
 import sys
 import logging
+import trackpy as tp
+import pandas as pd
+import json
+import copy
+import scipy
+from scipy.spatial.distance import cdist
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
+
+DENSITY_K_NEIGHBORS = 5  # You can adjust this value as needed
 
 class OrganoiDL():
     '''
@@ -55,12 +63,33 @@ class OrganoiDL():
         self.model_name = None
         self.model = None
         self.img_scale = [0., 0.]
-        self.pred_bboxes = {}
-        self.pred_scores = {}
-        self.pred_masks = {}
-        self.signal_masks = {}
-        self.pred_ids = {}
-        self.next_id = {}
+
+        # Storage for shape layer data. { "shape_layer_name": 
+        #{
+        #   "detection_data": {
+        #       id: {
+        #           "bbox": [x1, y1, x2, y2], 
+        #           "score": float,
+        #           ---- Other features ----
+        #      }
+        #   },
+        #   "segmentation_data": {
+        #      "id": {
+        #           "mask": [polygon coordinates], # polygon coordinates of the mask
+        #           "{signal_name}_mask": [polygon coordinates], # polygon coordinates of the signal mask
+        #       }
+        #   }
+        #   "image_size": [H, W],
+        #   "displayed_ids": [list of IDs that are currently displayed in the layer as str],
+        #   "next_id": int (next ID to be attributed to a new box)
+        #}
+        self.storage = {}
+        # self.pred_bboxes = {}
+        # self.pred_scores = {}
+        # self.pred_masks = {}
+        # self.signal_masks = {}
+        # self.pred_ids = {}
+        # self.next_id = {}
         self.sam_predictor = None
 
     def set_scale(self, img_scale):
@@ -240,31 +269,75 @@ class OrganoiDL():
         scores = torch.Tensor(scores)
         # apply NMS to remove overlaping boxes
         bboxes, pred_scores = _utils.apply_nms(bboxes, scores)
-        self.pred_bboxes[shapes_name] = bboxes
-        self.pred_scores[shapes_name] = pred_scores
-        num_predictions = bboxes.size(0)
-        self.pred_ids[shapes_name] = [int(i+1) for i in range(num_predictions)]
-        self.next_id[shapes_name] = num_predictions+1
 
-    def run_segmentation(self, img, mask_name, bboxes, signal_fields):
+        detection_data = {int(i+1): {
+            'bbox': json.dumps(bboxes[i].tolist()),
+            'score': pred_scores[i].item(),
+        } for i in range(bboxes.size(0))}
+
+        centers = []
+        bbox_ids = []
+        for bbox_id, det in detection_data.items():
+            bbox = json.loads(det['bbox'])
+            y1, x1, y2, x2 = bbox
+            center = ((y1 + y2) / 2, (x1 + x2) / 2)
+            centers.append(center)
+            bbox_ids.append(bbox_id)
+
+        centers = np.array(centers)
+        dist_matrix = cdist(centers, centers)
+
+        for i, bbox_id in enumerate(bbox_ids):
+            # Exclude self (distance zero)
+            dists = np.delete(dist_matrix[i], i)
+            if len(dists) >= DENSITY_K_NEIGHBORS:
+                closest = np.partition(dists, DENSITY_K_NEIGHBORS-1)[:DENSITY_K_NEIGHBORS]
+                avg_dist = float(np.mean(closest))
+            elif len(dists) > 0:
+                avg_dist = float(np.mean(dists))
+            else:
+                avg_dist = 0.0
+            detection_data[bbox_id]['local_density'] = avg_dist
+
+        self.storage[shapes_name] = {
+            'detection_data': detection_data,
+            'image_size': list(img.shape[:2]),
+            'next_id': bboxes.size(0) + 1,
+            'segmentation_data': {},
+        }
+
+    def _fill_default_data(self, shapes_name):
+        """ Checks that all detections have same set of features"""
+        if shapes_name not in self.storage:
+            return
+        all_keys = {key for det_id, props in self.storage[shapes_name]['detection_data'].items() for key in props.keys()}
+        for curr_id in self.storage[shapes_name]['detection_data'].keys():
+            for key in all_keys:
+                if key not in self.storage[shapes_name]['detection_data'][curr_id]:
+                    self.storage[shapes_name]['detection_data'][curr_id][key] = None
+
+    def run_segmentation(self, img, shapes_name, bboxes, signal_fields):
         """
         Runs segmentation pipeline for selected image, based on previously detected bboxes
         Inputs
         ----------
         img: Numpy array of size [H, W, 3]
             The input image
-        mask_name: str
-            Name of mask
+        shapes_name: str
+            Name of shape layer
         bbooxes: Numpy array of size [N, 4]
             Array of all predicted bboxes in xyxy format
         signal_field: dict({signal_name: signal_field})
             Optional signal fields for the image
         """
+        showed_ids = self.storage.get(shapes_name, {}).get('displayed_ids', [])
+        assert len(bboxes) == len(showed_ids), "Number of bboxes must match number of stored displayed IDs"
         signal_masks = {}
-        if bboxes.shape[0] == 0:
+        if len(bboxes) == 0:
             pred_mask = np.array([])
         else:
             img = _utils.normalize(img)
+            bboxes = torch.Tensor(bboxes)
             bboxes = torch.stack((
                 bboxes[:, 1],
                 bboxes[:, 0],
@@ -294,24 +367,28 @@ class OrganoiDL():
                 signal_mask = np.squeeze(signal_mask.cpu().numpy().astype(np.uint8))
                 if len(signal_mask.shape) == 2:
                     signal_mask = np.expand_dims(pred_mask, axis=0)
+                assert len(pred_mask) == len(signal_mask)
                 signal_masks[signal_name] = signal_mask
-            
-        self.pred_masks[mask_name] = pred_mask
-            
-        if len(signal_masks) > 0:
-            self.signal_masks[mask_name] = signal_masks
-            assert len(pred_mask) == len(signal_mask)
+        
         features = []
-        for idx in range(len(pred_mask)):
-            features.append(self._compute_features(
+        for idx in range(len(showed_ids)):
+            curr_id = showed_ids[idx]
+            self.storage[shapes_name]['segmentation_data'][curr_id] = {}
+            self.storage[shapes_name]['segmentation_data'][curr_id]['mask'] = json.dumps(mask2polygon(pred_mask[idx]))
+            if len(signal_masks) > 0:
+                for signal_name in signal_masks.keys():
+                    self.storage[shapes_name]['segmentation_data'][curr_id][f'{signal_name}_mask'] = json.dumps(mask2polygon(signal_masks[signal_name][idx]))
+            curr_features = self._compute_features(
                 pred_mask[idx], 
-                idx, 
+                curr_id, 
                 {signal_name: (signal_mask[idx], signal_fields[signal_name][:, :, 0]) for signal_name, signal_mask in signal_masks.items()}, 
-            ))
-        features = {key: [feature[key] for feature in features] for key in features[0]}
-        return pred_mask, features, signal_masks
+            )
+            self.storage[shapes_name]['detection_data'][curr_id].update(curr_features)
+            features.append(curr_features)
+        self._fill_default_data(shapes_name)
+        return pred_mask, signal_masks
     
-    def _compute_features(self, mask, idx, signal_data):
+    def _compute_features(self, mask, org_id, signal_data):
         """
         Computes mask-based features for detected organoids
         
@@ -327,16 +404,16 @@ class OrganoiDL():
         area = [cv2.contourArea(contour) for contour in contours]
         id_selected = np.argmax(area)
         if len(contours) > 1:
-            logging.warning(f"Multiple contours found for organoid {idx}. Using the contour with largest area: {area[id_selected]}")
+            logging.warning(f"Multiple contours found for organoid ID#{org_id}. Using the contour with largest area: {area[id_selected]}")
         perimeter = cv2.arcLength(contours[id_selected], True)
         if perimeter > 0:
             roundness = (4 * np.pi * area[id_selected]) / (perimeter ** 2)
         else:
             roundness = 0
         features = {
-            'Area (pixel units)': area[id_selected],
-            'Perimeter (pixel units)': perimeter,
-            'Roundness': roundness
+            'Area (pixel units)': float(area[id_selected]),
+            'Perimeter (pixel units)': float(perimeter),
+            'Roundness': float(roundness)
         }
         for signal_name, (signal_mask, signal_field) in signal_data.items():
             signal_contours, _ = cv2.findContours(signal_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -344,10 +421,10 @@ class OrganoiDL():
             signal_total_intensity = np.sum(signal_mask * signal_field) / 255.0
             signal_mean_intensity = signal_total_intensity / total_signal_area
             features.update({
-                f"{signal_name} area (pixel units)": total_signal_area,
-                f"{signal_name} mean intensity": signal_mean_intensity,
-                f"{signal_name} total intensity": signal_total_intensity,
-                f"{signal_name} components": len(signal_contours)
+                f"{signal_name} area (pixel units)": float(total_signal_area),
+                f"{signal_name} mean intensity": float(signal_mean_intensity),
+                f"{signal_name} total intensity": float(signal_total_intensity),
+                #f"{signal_name} components": int(len(signal_contours))
             })
         return features
 
@@ -355,89 +432,177 @@ class OrganoiDL():
     def apply_params(self, shapes_name, confidence, min_diameter_um):
         """ After results have been stored in dict this function will filter the dicts based on the confidence
         and min_diameter_um thresholds for the given results defined by shape_name and return the filtered dicts. """
-        pred_bboxes, pred_scores, pred_ids = self._apply_confidence_thresh(shapes_name, confidence)
-        if pred_bboxes.size(0)!=0:
-            pred_bboxes, pred_scores, pred_ids = self._filter_small_organoids(pred_bboxes, pred_scores, pred_ids, min_diameter_um)
-        pred_bboxes = _utils.convert_boxes_to_napari_view(pred_bboxes)
-        return pred_bboxes, pred_scores, pred_ids
+        properties = {key: [] for value in self.storage[shapes_name]['detection_data'].values() for key in value.keys()}
+        properties['bbox_id'] = []
+        selected_bboxes = []
+        min_diameter_x = min_diameter_um / self.img_scale[0]
+        min_diameter_y = min_diameter_um / self.img_scale[1]
+        for bbox_id in self.storage[shapes_name]['detection_data'].keys():
+            bbox = json.loads(self.storage[shapes_name]['detection_data'][bbox_id]['bbox'])
+            score = self.storage[shapes_name]['detection_data'][bbox_id]['score']
+            if score < confidence: 
+                continue
+            dx, dy = _utils.get_diams(torch.Tensor(bbox))
+            if (dx < min_diameter_x or dy < min_diameter_y) and score < 1:
+                continue
+            for key in properties.keys():
+                if key == 'bbox_id':
+                    properties[key].append(int(bbox_id))
+                else:
+                    properties[key].append(self.storage[shapes_name]['detection_data'][bbox_id].get(key, None))
+            selected_bboxes.append(bbox)
+        self.storage[shapes_name]['displayed_ids'] = properties['bbox_id'].copy()
+        selected_bboxes = _utils.convert_boxes_to_napari_view(selected_bboxes)
+        return selected_bboxes, properties
 
-    def _apply_confidence_thresh(self, shapes_name, confidence):
-        """ Filters out results of shapes_name based on the current confidence threshold. """
-        if shapes_name not in self.pred_bboxes.keys(): return torch.empty((0)), torch.empty((0)), []
-        keep = (self.pred_scores[shapes_name]>confidence).nonzero(as_tuple=True)[0]
-        if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
-        result_bboxes = self.pred_bboxes[shapes_name][keep]
-        result_scores = self.pred_scores[shapes_name][keep]
-        result_ids = [self.pred_ids[shapes_name][int(i)] for i in keep.tolist()]
-        return result_bboxes, result_scores, result_ids
-    
-    def _filter_small_organoids(self, pred_bboxes, pred_scores, pred_ids, min_diameter):
-        """ Filters out small result boxes of shapes_name based on the current min diameter size. """
-        if len(pred_bboxes)==0: return torch.empty((0)), torch.empty((0)), []
-        min_diameter_x = min_diameter / self.img_scale[0]
-        min_diameter_y = min_diameter / self.img_scale[1]
-        keep = []
-        for idx in range(len(pred_bboxes)):
-            dx, dy = _utils.get_diams(pred_bboxes[idx])
-            if (dx >= min_diameter_x and dy >= min_diameter_y) or pred_scores[idx] == 1: keep.append(idx)
-        if len(keep) == 0: return torch.empty((0)), torch.empty((0)), []
-        pred_bboxes = pred_bboxes[keep]
-        pred_scores = pred_scores[keep]
-        pred_ids = [pred_ids[i] for i in keep]
-        return pred_bboxes, pred_scores, pred_ids
-
-    def update_bboxes_scores(self, shapes_name, new_bboxes, new_scores, new_ids, old_confidence, old_min_diameter):
+    def update_bboxes_scores(self, shapes_name, new_bboxes, new_properties, image_shape):
         ''' Updated the results dicts, self.pred_bboxes, self.pred_scores and self.pred_ids with new results.
         If the shapes name doesn't exist as a key in the dicts the results are added with the new key. If the
         key exists then new_bboxes, new_scores and new_ids are compared to the class result dicts and the dicts 
         are updated, either by adding some box (user added box) or removing some box (user deleted a prediction).'''
         new_bboxes = _utils.convert_boxes_from_napari_view(new_bboxes)
-        new_scores =  torch.Tensor(list(new_scores))
-        new_ids = list(new_ids)
+        new_ids = list(map(int, list(new_properties.pop('bbox_id'))))
         # if run hasn't been run
-        if shapes_name not in self.pred_bboxes.keys():
-            self.pred_bboxes[shapes_name] = new_bboxes
-            self.pred_scores[shapes_name] = new_scores
-            self.pred_ids[shapes_name] = new_ids
-            self.next_id[shapes_name] = len(new_ids)+1
+        if shapes_name not in self.storage.keys():
+
+            self.storage[shapes_name] = {
+                "detection_data": {},
+                "image_size": image_shape[:2],
+                "displayed_ids": new_ids.copy(),
+                "next_id": max(new_ids) + 1 if len(new_ids) > 0 else 1
+            }
+            for idx, box_id in enumerate(new_ids):
+                self.storage[shapes_name]['detection_data'][box_id] = {key: new_properties[key][idx] for key in new_properties.keys()}
+                self.storage[shapes_name]['detection_data'][box_id]['bbox'] = json.dumps(new_bboxes[idx])
 
         elif len(new_ids)==0: return
 
         else:
-            min_diameter_x = old_min_diameter / self.img_scale[0]
-            min_diameter_y = old_min_diameter / self.img_scale[1]
-            # find ids that are not in self.pred_ids but are in new_ids
-            added_box_ids = list(set(new_ids).difference(self.pred_ids[shapes_name]))
-            if len(added_box_ids) > 0:
-                added_ids = [new_ids.index(box_id) for box_id in added_box_ids]
-                #  and add them
-                self.pred_bboxes[shapes_name] = torch.cat((self.pred_bboxes[shapes_name], new_bboxes[added_ids]))
-                self.pred_scores[shapes_name] = torch.cat((self.pred_scores[shapes_name], new_scores[added_ids]))
-                new_ids_to_add = [new_ids[i] for i in added_ids]
-                self.pred_ids[shapes_name].extend(new_ids_to_add)
-            
-            # and find ids that are in self.pred_ids and not in new_ids
-            potential_removed_box_ids = list(set(self.pred_ids[shapes_name]).difference(new_ids))
-            if len(potential_removed_box_ids) > 0:
-                potential_removed_ids = [self.pred_ids[shapes_name].index(box_id) for box_id in potential_removed_box_ids]
-                remove_ids = []
-                for idx in potential_removed_ids:
-                    dx, dy  = _utils.get_diams(self.pred_bboxes[shapes_name][idx])
-                    if self.pred_scores[shapes_name][idx] > old_confidence and dx > min_diameter_x and dy > min_diameter_y:
-                        remove_ids.append(idx)
-                # and remove them
-                for idx in reversed(remove_ids):
-                    self.pred_bboxes[shapes_name] = torch.cat((self.pred_bboxes[shapes_name][:idx, :], self.pred_bboxes[shapes_name][idx+1:, :]))
-                    self.pred_scores[shapes_name] = torch.cat((self.pred_scores[shapes_name][:idx], self.pred_scores[shapes_name][idx+1:]))
-                    new_pred_ids = self.pred_ids[shapes_name][:idx]
-                    new_pred_ids.extend(self.pred_ids[shapes_name][idx+1:])
-                    self.pred_ids[shapes_name] = new_pred_ids
-            self.next_id[shapes_name] = max(self.pred_ids[shapes_name]) + 1
+            old_ids = self.storage[shapes_name]['displayed_ids']
+            removed_ids = [old_id for old_id in old_ids if old_id not in new_ids]
+            for idx, box_id in enumerate(new_ids):
+                self.storage[shapes_name]['detection_data'][box_id] = {key: new_properties[key][idx] for key in new_properties.keys()}
+                self.storage[shapes_name]['detection_data'][box_id]['bbox'] = json.dumps(new_bboxes[idx])
+            for box_id in removed_ids:
+                self.storage[shapes_name]['detection_data'].pop(box_id, None)
+            self.storage[shapes_name]['displayed_ids'] = new_ids.copy()
+            self.storage[shapes_name]['next_id'] = max(list(map(int, self.storage[shapes_name]['detection_data'].keys())), default=0) + 1
+        self._fill_default_data(shapes_name)
+
 
     def remove_shape_from_dict(self, shapes_name):
         """ Removes results of shapes_name from all result dicts. """
-        self.pred_bboxes.pop(shapes_name, None)
-        self.pred_scores.pop(shapes_name, None)
-        self.pred_ids.pop(shapes_name, None)
-        self.next_id.pop(shapes_name, None)
-        self.pred_masks.pop(shapes_name, None)
+        self.storage.pop(shapes_name, None)
+
+    def replace_detection_id(self, shape_name, old_id, new_id):
+        """
+        Replaces the detection ID in the storage dict for the given shape_name.
+        Inputs
+        ----------
+        shape_name: str
+            The name of the shape layer to update
+        old_id: int
+            The old ID to replace
+        new_id: int
+            The new ID to set
+        """
+        new_id = int(new_id)
+        if shape_name not in self.storage:
+            raise ValueError(f"Shape {shape_name} not found in storage.")
+        if old_id not in self.storage[shape_name]['detection_data']:
+            raise ValueError(f"Old ID {old_id} not found in shape {shape_name} detection data.")
+        self.storage[shape_name]['detection_data'][new_id] = self.storage[shape_name]['detection_data'].pop(old_id)
+        if old_id in self.storage[shape_name]['segmentation_data']:
+            self.storage[shape_name]['segmentation_data'][new_id] = self.storage[shape_name]['segmentation_data'].pop(old_id)
+        displayed_ids = self.storage[shape_name]['displayed_ids']
+        if old_id in displayed_ids:
+            displayed_ids[displayed_ids.index(old_id)] = new_id
+        self.storage[shape_name]['next_id'] = max(new_id + 1, self.storage[shape_name]['next_id'])
+
+    def run_tracking(self, imgs, shape_names, tracking_method='trackpy', tracking_params=None):
+        """
+        Runs tracking for all shapes in shape_names using the tracking model and parameters.
+        Updates self.pred_ids for each frame so that IDs are consistent across frames.
+        Inputs
+        ----------
+        imgs: list of Numpy arrays
+            List of images to run tracking on (not used for tracking, but kept for API compatibility)
+        shape_names: list of str
+            List of shape names to run tracking on (should be ordered by frame)
+        tracking_method: str
+            Identifier of the tracking library to use. Only 'trackpy' is supported.
+        tracking_params: dict
+            Parameters for the tracking model. Optional.
+        """
+        if tracking_method != 'trackpy':
+            raise ValueError(f"Tracking method {tracking_method} is not supported. Only 'trackpy' is available.")
+        if tracking_params is None:
+            tracking_params = {}
+        tl_data = []
+        total_frames = len(shape_names)
+        frame_to_shape = {}
+        for frame_idx, shape_name in enumerate(shape_names):
+            for bbox_id in self.storage.get(shape_name, {}).get('displayed_ids', []):
+                bbox = json.loads(self.storage[shape_name]['detection_data'][bbox_id]['bbox'])
+                y1, x1, y2, x2 = bbox
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                tl_data.append({
+                    'frame': frame_idx,
+                    'x': cx,
+                    'y': cy,
+                    'bbox_id': bbox_id,
+                    'score': self.storage[shape_name]['detection_data'][bbox_id].get('score'),
+                })
+            frame_to_shape[frame_idx] = shape_name
+
+        if not tl_data:
+            return
+        df = pd.DataFrame(tl_data)
+        search_range = tracking_params['search_range']
+        memory = tracking_params['memory']
+        tracked = tp.link_df(df, search_range=search_range, memory=memory)
+
+        # Shift tracked particle ids to avoid conflicts with existing IDs
+        id_shift_val = max([int(self.storage[shape_name]['next_id']) for shape_name in shape_names if shape_name in self.storage], default=0)
+        tracked['particle'] = tracked['particle'] + id_shift_val
+
+        for idx, row in tracked.iterrows():
+            bbox_id = int(row['bbox_id'])
+            frame_idx = int(row['frame'])
+            shape_name = frame_to_shape[frame_idx]
+            particle_id = int(row['particle'])
+            print(f"{bbox_id} -> {particle_id} at frame {frame_idx} in shape {shape_name}")
+            self.replace_detection_id(shape_name, bbox_id, particle_id)
+
+
+        # Store frame idx for last encounter of each particle
+        last_particle_layer_idx = {}
+        for frame_idx in range(total_frames):
+            shape_name = frame_to_shape[frame_idx]
+            frame_rows = tracked[tracked['frame'] == frame_idx]
+
+            for idx, row in frame_rows.iterrows():
+                particle_id = int(row['particle'])
+                last_particle_layer_idx[particle_id] = frame_idx
+
+            # Remove old particles (> memory frames ago)
+            last_particle_layer_idx = {particle_id: layer_idx for particle_id, layer_idx in last_particle_layer_idx.items() if layer_idx + memory >= frame_idx}
+            
+            cur_shape_name = frame_to_shape[frame_idx]
+            if not cur_shape_name in self.storage:
+                self.storage[cur_shape_name] = {
+                    'detection_data': {},
+                    'image_size': imgs[frame_idx].shape[:2],
+                    'displayed_ids': [],
+                    'next_id': 1
+                }
+
+            for particle_id, prev_frame_idx in last_particle_layer_idx.items():
+                if not particle_id in self.storage[cur_shape_name]['detection_data']:
+                    prev_shape_name = frame_to_shape[prev_frame_idx]
+                    self.storage[cur_shape_name]['detection_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['detection_data'][particle_id])
+                    if particle_id in self.storage[prev_shape_name]['segmentation_data']:
+                        self.storage[cur_shape_name]['segmentation_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['segmentation_data'][particle_id])
+                    self.storage[cur_shape_name]['next_id'] = max(self.storage[cur_shape_name]['next_id'], particle_id + 1)
+            self._fill_default_data(cur_shape_name)
