@@ -336,7 +336,23 @@ class OrganoidAnalyzerWidget(QWidget):
             show_error(f"Failed to load cached results from {cache_file}")
             return None
         
+    def _select_layer(self, layer_name):
+        for layer in self.viewer.layers:
+            layer.selected = False
+        self.viewer.layers[layer_name].selected = True
     
+    def _activate_bbox_drawing_mode(self, layer_name):
+        """Selects the given shapes layer in the viewer and activates the 'ADD_RECTANGLE' mode.
+        """
+        self._select_layer(layer_name)
+        self.viewer.layers[layer_name].mode = 'ADD_RECTANGLE'
+        
+    def _activate_bbox_modify_mode(self, layer_name):
+        """Selects the given shapes layer in the viewer and activates the 'select' mode.
+        """
+        self._select_layer(layer_name)
+        self.viewer.layers[layer_name].mode = 'select'
+
     def _create_shapes_from_cache(self, image_layer_name, cache_data, labels_layer_name=None):
         """Create a shapes layer from cached detection data"""
         if self.organoiDL.img_scale[0] == 0:
@@ -362,7 +378,8 @@ class OrganoidAnalyzerWidget(QWidget):
             labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         
         self.organoiDL.storage[labels_layer_name] = cache_data
-        self._update_detections(labels_layer_name, image_layer_name) 
+        self._update_detections(labels_layer_name, image_layer_name)
+        self._activate_bbox_modify_mode(labels_layer_name)
         return True
 
     def _sel_layer_changed(self, event):
@@ -1418,6 +1435,7 @@ class OrganoidAnalyzerWidget(QWidget):
                         img_data.shape[1:3]
                     )
                     self._update_detections(frame_layer_name, self.image_layer_name)
+                self._activate_bbox_drawing_mode(frame_layer_name)
             else:
                 self.organoiDL.update_bboxes_scores(
                     new_layer_name,
@@ -1426,6 +1444,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     img_data.shape[:2]
                 )
                 self._update_detections(new_layer_name, self.image_layer_name)
+                self._activate_bbox_drawing_mode(new_layer_name)
 
         else:
             new_layer_name = f'Guidance-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
@@ -1443,7 +1462,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     shape_type='rectangle',
                     edge_width=12
             )
-        self.viewer.layers[new_layer_name].mode = 'ADD_RECTANGLE'
+            self._activate_bbox_drawing_mode(new_layer_name)
 
     def _update_added_image(self, added_items):
         """
