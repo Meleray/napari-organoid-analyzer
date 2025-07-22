@@ -1443,6 +1443,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     shape_type='rectangle',
                     edge_width=12
             )
+        self.viewer.layers[new_layer_name].mode = 'ADD_RECTANGLE'
 
     def _update_added_image(self, added_items):
         """
