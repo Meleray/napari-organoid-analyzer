@@ -73,6 +73,14 @@ warnings.filterwarnings("ignore")
 
 ANNOTATION_TYPES = ['Text', 'Ruler', 'Objects / Boxes', 'Classes', 'Number']
 
+
+# class ShapesWithDefaultProperties(layers.Shapes):
+#     def add(self, data, **kwargs):
+#         # Force default properties for all new shapes
+#         kwargs.setdefault("properties", {"uuid": [None]})
+#         return super().add(data, **kwargs)
+
+
 class OrganoidAnalyzerWidget(QWidget):
     '''
     The main widget of the organoid analyzer
@@ -125,6 +133,13 @@ class OrganoidAnalyzerWidget(QWidget):
 
         # assign class variables
         self.viewer = napari_viewer 
+
+        # # Access the canvas of the viewer
+        # canvas = self.viewer.window._qt_viewer.canvas
+        # self.old_mouse_release_event = canvas.mouseReleaseEvent
+
+        # # Override the default mouse release event
+        # canvas.mouseReleaseEvent = self.custom_mouse_release_event
 
         # create cache dir for models if it doesn't exist and add any previously added local
         # models to the model dict
@@ -515,6 +530,16 @@ class OrganoidAnalyzerWidget(QWidget):
         new_text = 'Number of organoids: '+str(self.num_organoids)
         self.organoid_number_label.setText(new_text)
 
+    def _add_shapes_layer(self, *args, **kwargs):
+        # shapes_layer = ShapesWithDefaultProperties(*args, **kwargs)
+        shapes_layer = layers.Shapes(*args, **kwargs)
+        # shapes_layer = self.viewer.add_shapes(*args, **kwargs)
+        self.viewer.add_layer(shapes_layer)
+        print('shapes_layer.current_properties before update', shapes_layer.current_properties)
+        # # shapes_layer.current_properties.update({'uuid': np.array([None])})
+        shapes_layer.current_properties = {'uuid': np.array([None])}
+        print('shapes_layer.current_properties after update', shapes_layer.current_properties)
+        return shapes_layer
 
     def _update_detections(self, labels_layer_name, image_layer_name=None):
         """ 
@@ -560,7 +585,7 @@ class OrganoidAnalyzerWidget(QWidget):
                             'color': settings.TEXT_COLOR}
             # if no organoids were found just make an empty shapes layer
             if self.num_organoids==0: 
-                self.cur_shapes_layer = self.viewer.add_shapes(name=labels_layer_name,
+                self.cur_shapes_layer = self._add_shapes_layer(name=labels_layer_name,
                                                                properties=properties,
                                                                text=text_params,
                                                                edge_color=settings.COLOR_DEFAULT,
@@ -569,7 +594,7 @@ class OrganoidAnalyzerWidget(QWidget):
                                                                scale=self.viewer.layers[image_layer_name].scale[:2],)
             # otherwise make the layer and add the boxes
             else:
-                self.cur_shapes_layer = self.viewer.add_shapes(bboxes, 
+                self.cur_shapes_layer = self._add_shapes_layer(bboxes, 
                                                                name=labels_layer_name,
                                                                scale=self.viewer.layers[image_layer_name].scale[:2],
                                                                face_color='transparent',  
@@ -627,7 +652,7 @@ class OrganoidAnalyzerWidget(QWidget):
                             'color': settings.TEXT_COLOR}
             # if no organoids were found just make an empty shapes layer
             if self.num_organoids==0: 
-                self.cur_shapes_layer = self.viewer.add_shapes(name=labels_layer_name,
+                self.cur_shapes_layer = self._add_shapes_layer(name=labels_layer_name,
                                                                properties=properties,
                                                                text=text_params,
                                                                edge_color=settings.COLOR_DEFAULT,
@@ -636,7 +661,7 @@ class OrganoidAnalyzerWidget(QWidget):
                                                                scale=self.viewer.layers[image_layer_name].scale[:2],)
             # otherwise make the layer and add the boxes
             else:
-                self.cur_shapes_layer = self.viewer.add_shapes(bboxes, 
+                self.cur_shapes_layer = self._add_shapes_layer(bboxes, 
                                                                name=labels_layer_name,
                                                                scale=self.viewer.layers[image_layer_name].scale[:2],
                                                                face_color='transparent',  
@@ -1540,7 +1565,7 @@ class OrganoidAnalyzerWidget(QWidget):
             properties = {}
             text_params = {}
             edge_color = settings.COLOR_CLASS_1
-            self.viewer.add_shapes( 
+            self._add_shapes_layer( 
                     name=new_layer_name,
                     scale=self.viewer.layers[self.image_layer_name].scale[:2],
                     face_color='transparent',  
@@ -1672,71 +1697,60 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         This function will be called every time the current shapes layer data changes
         """
+        print('shapes_event_handler()')
         # Do not perform update if changes in the layer are due to slider changes or tracking
         if (
             'napari-organoid-analyzer:_rerun' in self.cur_shapes_layer.metadata or 
             'napari-organoid-analyzer:_tracking' in self.cur_shapes_layer.metadata or 
             'napari-organoid-analyzer:_shape_handler' in self.cur_shapes_layer.metadata
+            # 'napari-organoid-analyzer:_modified_outside_shape_layer' in self.cur_shapes_layer.metadata
         ):
             return
         
+        # print('self.cur_shapes_layer._is_moving', self.cur_shapes_layer._is_moving)
+        # if self.cur_shapes_layer._is_moving:
+        #     return
         
         with utils.set_dict_key(self.cur_shapes_layer.metadata, 'napari-organoid-analyzer:_shape_handler', True):
-        # get new ids, new boxes and update the number of organoids
+            # get new ids, new boxes and update the number of organoids
             if not self.cur_shapes_layer.name in self.label2im:
                 raise RuntimeError(f"Internal error: no image layer found for {self.cur_shapes_layer.name}")
             image_layer_name = self.label2im[self.cur_shapes_layer.name]
+
             if not image_layer_name in self.viewer.layers:
                 raise RuntimeError(f"Internal error: image layer {image_layer_name} not found in viewer")
             image_data = self.viewer.layers[image_layer_name].data
+
             if image_data.ndim == 4:
+                print('img data shape', self.viewer.layers[image_layer_name].data.shape)
                 image_shape = self.viewer.layers[image_layer_name].data.shape[1:3]
             else:
                 image_shape = self.viewer.layers[image_layer_name].data.shape[:2]
+
+            # Gets the data-abstraction of the detection layer
+            detection_layer = self.stored_detection_layers[self.cur_shapes_layer.name]
+            
+            # Update the data of all detections
             new_bboxes = self.cur_shapes_layer.data
-            properties = self.cur_shapes_layer.properties.copy()
-            new_ids = properties.get('bbox_id', [])
-            self._update_num_organoids(len(new_ids))
-            curr_next_id = self.organoiDL.storage[self.cur_shapes_layer.name]['next_id']
-        
-            # check if duplicate ids
-            contains_nan = False
-            try:
-                new_ids = [int(id_val) for id_val in new_ids]
-            except ValueError:
-                contains_nan = True
-            if len(new_ids) > len(set(new_ids)) or contains_nan:
-                used_id = set()
-                for idx, id_val in enumerate(new_ids):
-                    curr_nan = False
-                    try:
-                        id_val = int(id_val)
-                    except ValueError:
-                        curr_nan = True
-                    if id_val in used_id or curr_nan:
-                        new_ids[idx] = int(curr_next_id)
-                        used_id.add(curr_next_id)
-                        curr_next_id += 1
-                        properties['score'][idx] = 1.0
-                    else:
-                        used_id.add(id_val)
+            new_properties = self.cur_shapes_layer.properties # .copy()
+            detection_layer.update_active_detections(new_bboxes, new_properties)
 
+            # Retrieve the visualized boxes
+            bboxes, properties = detection_layer.get_bbox_layer_params()
+            # detection_layer.save_cache_results()  # TODO: do the caching in the abstract data layer and not in the UI
 
-            new_ids = list(map(int, new_ids))
-            properties['bbox_id'] = new_ids
-            self.cur_shapes_layer.properties = properties
-            self.organoiDL.update_bboxes_scores(self.cur_shapes_layer.name, new_bboxes, properties, image_shape)
-            self._save_cache_results(self.cur_shapes_layer.name)
-            #self._update_detections(self.cur_shapes_layer.name, image_layer_name)
-            bboxes, properties = self.organoiDL.apply_params(
-                self.cur_shapes_layer.name,
-                self.stored_confidences.get(self.cur_shapes_layer.name, self.confidence),
-                self.stored_diameters.get(self.cur_shapes_layer.name, self.min_diameter)
-            )
+            # Updates the user interface
+            self._update_num_organoids(len(bboxes))
+            self.cur_shapes_layer.data = bboxes
             self.cur_shapes_layer.properties = properties
             self._update_detection_data_tab()
+            self._save_cache_results(self.cur_shapes_layer.name)
             self.cur_shapes_layer.refresh()
             self.cur_shapes_layer.refresh_text()
+
+            # Necessary to avoid copying properties from previous boxes to newly created ones.
+            self.cur_shapes_layer.current_properties = {k: np.array([None]) for k in properties.keys()}
+
 
     def _setup_input_widget(self):
         """
@@ -2548,20 +2562,21 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         self.detection_data_tree.clear()  # Clear previous data
         if self.cur_shapes_layer and self.cur_shapes_layer.selected_data:
-            self.tab_widget.setTabEnabled(1, True)
-            for index in self.cur_shapes_layer.selected_data:
-                # Create a top-level item for each selected shape
-                top_item = QTreeWidgetItem(self.detection_data_tree)
-                top_item.setText(0, f"Detection ID {self.cur_shapes_layer.properties['bbox_id'][index]}")
-                top_item.setExpanded(False)
+            if 'bbox_id' in self.cur_shapes_layer.properties:
+                self.tab_widget.setTabEnabled(1, True)
+                for index in self.cur_shapes_layer.selected_data:
+                    # Create a top-level item for each selected shape
+                    top_item = QTreeWidgetItem(self.detection_data_tree)
+                    top_item.setText(0, f"Detection ID {self.cur_shapes_layer.properties['bbox_id'][index]}")
+                    top_item.setExpanded(False)
 
-                # Add properties as child items
-                for prop_name, prop_values in self.cur_shapes_layer.properties.items():
-                    if prop_name != 'bbox_id':
-                        child_item = QTreeWidgetItem(top_item)
-                        child_item.setText(0, prop_name)
-                        child_item.setText(1, str(prop_values[index]))
-            self.detection_data_tree.expandAll()
+                    # Add properties as child items
+                    for prop_name, prop_values in self.cur_shapes_layer.properties.items():
+                        if (prop_name != 'bbox_id') and (prop_name != 'uuid'):
+                            child_item = QTreeWidgetItem(top_item)
+                            child_item.setText(0, prop_name)
+                            child_item.setText(1, str(prop_values[index]))
+                self.detection_data_tree.expandAll()
 
     def _export_detection_data_to_csv(self):
         """

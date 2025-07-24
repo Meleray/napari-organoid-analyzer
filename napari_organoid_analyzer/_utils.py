@@ -254,6 +254,21 @@ def convert_boxes_from_napari_view(pred_bboxes):
     if len(new_boxes) > 0: new_boxes = torch.stack(new_boxes)
     return new_boxes.tolist() if len(new_boxes) > 0 else []
 
+
+def convert_napari_shape_to_bbox(coords):
+    """Gets the mimimal bbox covering the shape. 
+    
+    Args:
+        coords: a list of [x, y] points of the shape/polygon.
+    """
+    coords = np.array(coords)
+    assert coords.ndim==2, coords.shape
+    assert coords.shape[1]==2, coords.shape
+    xmin, ymin = coords.min(axis=0)
+    xmax, ymax = coords.max(axis=0)
+    return np.array([xmin, ymin, xmax, ymax])
+
+
 def apply_normalization(img):
     """ Normalize image"""
     # squeeze and change dtype
