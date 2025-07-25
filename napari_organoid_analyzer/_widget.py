@@ -843,6 +843,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if label_layer is None:
             show_error(f"Layer '{shapes_name}' not found in the viewer.")
             return
+        layer_name = label_layer.name
         
         lengths = [len(v) for v in label_layer.properties.values()]
         if len(set(lengths)) != 1:

@@ -334,7 +334,7 @@ class ExportDialog(QDialog):
                     QMessageBox.warning(self, "Invalid IDs", f"Invalid ID: {token}")
                     return None
         
-        return list(selected_ids)
+        return list(map(int, selected_ids))
     
     def _validate_and_accept(self):
         """Validate inputs before accepting"""
