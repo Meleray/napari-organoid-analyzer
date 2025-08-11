@@ -532,7 +532,11 @@ class OrganoiDL():
         tracking_method: str
             Identifier of the tracking library to use. Only 'trackpy' is supported.
         tracking_params: dict
-            Parameters for the tracking model. Optional.
+            Parameters for the tracking model. Should include:
+            - 'search_range': int, maximum distance particles can move between frames
+            - 'memory': int, number of frames a particle can be missed before being discarded
+            - 'create_missing_detections': bool, whether to create new bounding boxes for 
+              tracked objects that are missing in current frame based on memory parameter (default: False)
         """
         if tracking_method != 'trackpy':
             raise ValueError(f"Tracking method {tracking_method} is not supported. Only 'trackpy' is available.")
@@ -561,6 +565,7 @@ class OrganoiDL():
         df = pd.DataFrame(tl_data)
         search_range = tracking_params['search_range']
         memory = tracking_params['memory']
+        create_missing_detections = tracking_params.get('create_missing_detections', False)
         tracked = tp.link_df(df, search_range=search_range, memory=memory)
 
         # Shift tracked particle ids to avoid conflicts with existing IDs
@@ -593,6 +598,7 @@ class OrganoiDL():
             if not cur_shape_name in self.storage:
                 self.storage[cur_shape_name] = {
                     'detection_data': {},
+                    'segmentation_data': {},
                     'image_size': imgs[frame_idx].shape[:2],
                     'displayed_ids': [],
                     'next_id': 1
@@ -600,9 +606,14 @@ class OrganoiDL():
 
             for particle_id, prev_frame_idx in last_particle_layer_idx.items():
                 if not particle_id in self.storage[cur_shape_name]['detection_data']:
-                    prev_shape_name = frame_to_shape[prev_frame_idx]
-                    self.storage[cur_shape_name]['detection_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['detection_data'][particle_id])
-                    if particle_id in self.storage[prev_shape_name]['segmentation_data']:
-                        self.storage[cur_shape_name]['segmentation_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['segmentation_data'][particle_id])
-                    self.storage[cur_shape_name]['next_id'] = max(self.storage[cur_shape_name]['next_id'], particle_id + 1)
+                    # Only create missing detections if the checkbox is enabled
+                    if create_missing_detections:
+                        prev_shape_name = frame_to_shape[prev_frame_idx]
+                        self.storage[cur_shape_name]['detection_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['detection_data'][particle_id])
+                        # Ensure segmentation_data exists for current shape
+                        if 'segmentation_data' not in self.storage[cur_shape_name]:
+                            self.storage[cur_shape_name]['segmentation_data'] = {}
+                        if particle_id in self.storage[prev_shape_name].get('segmentation_data', {}):
+                            self.storage[cur_shape_name]['segmentation_data'][particle_id] = copy.deepcopy(self.storage[prev_shape_name]['segmentation_data'][particle_id])
+                        self.storage[cur_shape_name]['next_id'] = max(self.storage[cur_shape_name]['next_id'], particle_id + 1)
             self._fill_default_data(cur_shape_name)

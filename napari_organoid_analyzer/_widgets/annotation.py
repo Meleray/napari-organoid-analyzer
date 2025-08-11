@@ -755,7 +755,7 @@ class RulerImageLabel(QLabel):
                 y = self.cur_point.y()
                 self.lines[-1][-1] = [x, y]
                 self.lines[-1].append([x, y])
-        elif event.button() == Qt.RightButton:
+        elif event.button() == Qt.RightButton and self.drawing:
             self.lines[-1].pop()
             if len(self.lines[-1]) == 1:
                 self.lines.pop()
