@@ -315,7 +315,6 @@ class ExportDialog(QDialog):
                         return None
                     for curr_id in range(start, end + 1):
                         if curr_id not in self.layer_ids:
-                            print(curr_id, self.layer_ids)
                             QMessageBox.warning(self, "Invalid IDs", f"ID {curr_id} not found in layer.")
                             return None
                         selected_ids.add(curr_id)
@@ -326,7 +325,6 @@ class ExportDialog(QDialog):
                 try:
                     curr_id = int(token)
                     if curr_id not in self.layer_ids:
-                        print(curr_id, self.layer_ids)
                         QMessageBox.warning(self, "Invalid IDs", f"ID {curr_id} not found in layer.")
                         return None
                     selected_ids.add(curr_id)

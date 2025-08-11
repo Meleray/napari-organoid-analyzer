@@ -1,71 +1,77 @@
-from pathlib import Path
-from typing import List, Optional
-
-from skimage.io import imsave
-from skimage.color import rgb2gray
-from datetime import datetime
+# Standard library imports
+import cv2
 import json
+import matplotlib.pyplot as plt
+import numpy as np
+import os
 import os.path
 import pandas as pd
-from napari.utils import progress
-
-from napari import layers
-from napari.utils.notifications import show_info, show_error, show_warning
+import shutil
+import torch
+import warnings
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
 from urllib.request import urlretrieve
+
+# Third-party imports
+from napari import layers
+from napari.utils import progress
+from napari.utils.notifications import show_info, show_error, show_warning
+from qtpy.QtCore import Qt
+from qtpy.QtGui import QIntValidator
+from qtpy.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSlider,
+    QStackedLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+from skimage.color import rgb2gray
+from skimage.io import imsave
+
+# Local imports
+from napari_organoid_analyzer import _utils as utils
+from napari_organoid_analyzer import session
+from napari_organoid_analyzer import settings
+from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer._utils import (
-    convert_boxes_from_napari_view, 
-    collate_instance_masks, 
-    compute_image_hash, 
+    collate_instance_masks,
+    compute_image_hash,
+    convert_boxes_from_napari_view,
     convert_boxes_to_napari_view,
-    validate_bboxes,
     get_timelapse_name,
-    polygon2mask
+    polygon2mask,
+    validate_bboxes,
 )
 from napari_organoid_analyzer._widgets.annotation import get_annotation_dialogue
-
-
-import numpy as np
-
-from qtpy.QtCore import Qt
-from qtpy.QtWidgets import (
-    QHeaderView, 
-    QAbstractItemView,
-    QTableWidgetItem,
-    QWidget, 
-    QVBoxLayout, 
-    QApplication, 
-    QDialog, 
-    QFileDialog, 
-    QGroupBox, 
-    QHBoxLayout, 
-    QLabel, 
-    QComboBox, 
-    QPushButton, 
-    QLineEdit, 
-    QProgressBar, 
-    QSlider, 
-    QTabWidget, 
-    QTreeWidget, 
-    QTreeWidgetItem, 
-    QCheckBox, 
-    QTableWidget,
-    QStackedLayout,
-    QFormLayout
+from napari_organoid_analyzer._widgets.dialogues import (
+    ConfirmSamUpload,
+    ConfirmUpload,
+    ExportDialog,
+    SignalChannelDialog,
+    SignalDialog,
 )
-from qtpy.QtGui import QIntValidator
 
-from napari_organoid_analyzer._orgacount import OrganoiDL
-from napari_organoid_analyzer import _utils as utils
-from napari_organoid_analyzer import settings
-from napari_organoid_analyzer import session
-from napari_organoid_analyzer._widgets.dialogues import ConfirmUpload, ConfirmSamUpload, ExportDialog, SignalDialog, SignalChannelDialog
-import torch
-import pandas as pd
-import os
-import matplotlib.pyplot as plt
-import cv2
-
-import warnings
 warnings.filterwarnings("ignore")
 
 ANNOTATION_TYPES = ['Text', 'Ruler', 'Objects / Boxes', 'Classes', 'Number']
@@ -331,6 +337,10 @@ class OrganoidAnalyzerWidget(QWidget):
                     cache_data['detection_data'] = {
                         int(k): v for k, v in cache_data['detection_data'].items()
                     }
+                if "segmentation_data" in cache_data:
+                    cache_data['segmentation_data'] = {
+                        int(k): v for k, v in cache_data.get('segmentation_data', {}).items()
+                    }
                 return cache_data
         except (json.JSONDecodeError, IOError):
             show_error(f"Failed to load cached results from {cache_file}")
@@ -353,16 +363,18 @@ class OrganoidAnalyzerWidget(QWidget):
         if len(cache_data.get('detection_data', {})) == 0:
             show_error("No detections found in cache")
             return False
-        
-        self.confidence_slider.setValue(int(confidence * 100))
-        self.min_diameter_slider.setValue(int(min_diameter))
             
         # Create a new shapes layer
         if labels_layer_name is None:
             labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         
         self.organoiDL.storage[labels_layer_name] = cache_data
-        self._update_detections(labels_layer_name, image_layer_name) 
+        self._update_detections(
+            labels_layer_name=labels_layer_name, 
+            confidence=confidence, 
+            min_diameter=min_diameter, 
+            image_layer_name=image_layer_name
+        )
         return True
 
     def _sel_layer_changed(self, event):
@@ -397,6 +409,16 @@ class OrganoidAnalyzerWidget(QWidget):
             self.apply_to_timelapse_checkbox.setVisible(True)
         else:
             self.apply_to_timelapse_checkbox.setVisible(False)
+        
+        segmentation_selection_items = [self.segmentation_image_layer_selection.itemText(i) 
+                                        for i in range(self.segmentation_image_layer_selection.count())]
+        if self.cur_shapes_layer:
+            if self.cur_shapes_layer.name in segmentation_selection_items:
+                self.segmentation_image_layer_selection.setCurrentText(self.cur_shapes_layer.name)
+            else:
+                show_error(f"Current shapes layer '{self.cur_shapes_layer.name}' not found in segmentation layer selection")
+        else:
+            self.segmentation_image_layer_selection.setCurrentText('')
 
     def _added_layer(self, event):
         # get names of added layers, image and shapes
@@ -436,7 +458,6 @@ class OrganoidAnalyzerWidget(QWidget):
             return False
         cache_file = self._check_for_cached_results(image_hash)
         if cache_file:
-            from qtpy.QtWidgets import QMessageBox, QCheckBox, QVBoxLayout
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle('Cached Results Available')
             if shapes_name and shapes_name.startswith("TL_Frame"):
@@ -490,7 +511,7 @@ class OrganoidAnalyzerWidget(QWidget):
         new_text = 'Number of organoids: '+str(self.num_organoids)
         self.organoid_number_label.setText(new_text)
 
-    def _update_detections(self, labels_layer_name, image_layer_name=None):
+    def _update_detections(self, labels_layer_name, confidence=None, min_diameter=None, image_layer_name=None):
         """ 
         Adds the shapes layer to the viewer or updates it if already there.
         Required layer info to already be in self.organoiDL.storage dict.
@@ -500,13 +521,17 @@ class OrganoidAnalyzerWidget(QWidget):
                 show_error(f"Image layer name not provided for {labels_layer_name}.")
                 return
             self.label2im[labels_layer_name] = image_layer_name
-        self.stored_confidences[labels_layer_name] = self.confidence
-        self.stored_diameters[labels_layer_name] = self.min_diameter
+        if confidence is None:
+            confidence = self.confidence
+        if min_diameter is None:
+            min_diameter = self.min_diameter
+        print(f"Storage for {labels_layer_name}:\n{self.organoiDL.storage.get(labels_layer_name, {})}")
         bboxes, properties = self.organoiDL.apply_params(
             labels_layer_name,
-            self.stored_confidences.get(labels_layer_name, self.confidence),
-            self.stored_diameters.get(labels_layer_name, self.min_diameter)
+            confidence,
+            min_diameter,
         )
+        print(f"Updating detections with {len(bboxes)}!\n bboxes: {bboxes}, \nproperties: {properties}")
         self._update_num_organoids(len(bboxes))
         if labels_layer_name in self.shape_layer_names:
             self.viewer.layers[labels_layer_name].data = bboxes
@@ -547,7 +572,14 @@ class OrganoidAnalyzerWidget(QWidget):
                     self.timelapse_selection.addItem(timelapse_name)
                     self.timelapse_selection.setCurrentText(timelapse_name)
                     self.cur_timelapse_name = timelapse_name
-                self.timelapses[timelapse_name].add(labels_layer_name)   
+                self.timelapses[timelapse_name].add(labels_layer_name)
+
+        if not 'napari-organoid-analyzer:_rerun' in self.cur_shapes_layer.metadata:
+            with utils.set_dict_key(self.cur_shapes_layer.metadata, 'napari-organoid-analyzer:_rerun', True):
+                self.stored_confidences[labels_layer_name] = confidence
+                self.stored_diameters[labels_layer_name] = min_diameter
+                self.confidence_slider.setValue(int(confidence * 100))
+                self.min_diameter_slider.setValue(int(min_diameter))
                             
         # set current_edge_width so edge width is the same when users annotate - doesnt' fix new preds being added!
         self.viewer.layers[labels_layer_name].current_edge_width = 12
@@ -662,7 +694,7 @@ class OrganoidAnalyzerWidget(QWidget):
                            self.window_overlap,
                            crops)
 
-        self._update_detections(labels_layer_name, img_layer_name)
+        self._update_detections(labels_layer_name, image_layer_name=img_layer_name)
 
     def _on_run_segmentation(self):
         """
@@ -755,7 +787,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 if len(labels_layer.properties['bbox_id']) != masks.shape[0] or len(labels_layer.properties['score']) != masks.shape[0]:
                     show_error(f"Mismatch in number of masks and labels for layer {frame_layer_name}. Features have not been updated")
                     continue
-                self._update_detections(frame_layer_name, image_name)
+                self._update_detections(frame_layer_name, image_layer_name=image_name)
 
 
             segmentation_layer_name = f"Segmentation-{timelapse_name}"
@@ -849,11 +881,6 @@ class OrganoidAnalyzerWidget(QWidget):
         if len(set(lengths)) != 1:
             raise RuntimeError("Mismatch in number of masks and labels. Please rerun the segmentation on selected layer.")
         
-        # Get available features from the layer properties
-
-        #if not timelapse_export:
-        #    timelapse_export = self.run_for_timelapse_checkbox.isVisible() and self.run_for_timelapse_checkbox.#isChecked()
-        
         if timelapse_export:
             timelapse_name = get_timelapse_name(label_layer.name)
             if timelapse_name not in self.timelapses:
@@ -865,9 +892,9 @@ class OrganoidAnalyzerWidget(QWidget):
                 if layer_name not in self.viewer.layers:
                     show_warning(f"Layer {layer_name} not found in viewer. Skipping...")
                     continue
-                if hasattr(self.viewer.layers[layer_name], 'properties') and self.viewer.layers[layer_name].properties:
+                if hasattr(self.viewer.layers[layer_name], 'properties') and len(self.viewer.layers[layer_name].properties) > 0:
                     available_features.update(self.viewer.layers[layer_name].properties.keys())
-            masks_available = np.any([len(self.organoiDL.storage.get(layer_name, {}).get("segmentation_data", {})) for layer_name in timelapse_layers])
+            masks_available = np.any([len(self.organoiDL.storage.get(layer_name, {}).get("segmentation_data", {})) > 0 for layer_name in timelapse_layers])
             ids_with_masks = set()
             for layer_name in timelapse_layers:
                 if "segmentation_data" in self.organoiDL.storage.get(layer_name, {}):
@@ -937,14 +964,28 @@ class OrganoidAnalyzerWidget(QWidget):
                     raise RuntimeError(f"Layer {label_layer_name} is in timelapse but not a timelapse frame")
                 if not label_layer_name in self.organoiDL.storage:
                     raise RuntimeError(f"No storage data for layer {label_layer_name}. ")
-                frame_idx = int(label_layer_name.split('_')[1][5:])
+                frame_idx = label_layer_name.split('_')[1][5:]
                 frame_data = self.organoiDL.storage[label_layer_name]
-                data_json.update({f"Frame#{frame_idx}": frame_data})            
+                confidence = self.stored_confidences.get(label_layer_name, self.confidence)
+                min_diameter = self.stored_diameters.get(label_layer_name, self.min_diameter)
+                frame_data.update({
+                    "confidence": confidence,
+                    "min_diameter": min_diameter
+                })
+                data_json.update({frame_idx: frame_data})
+            data_json["type"] = "timelapse"            
         else:
         
             if not label_layer.name in self.organoiDL.storage:
                 raise RuntimeError(f"No storage data for layer {label_layer.name}. ")
             data_json = self.organoiDL.storage[label_layer.name]
+            confidence = self.stored_confidences.get(label_layer.name, self.confidence)
+            min_diameter = self.stored_diameters.get(label_layer.name, self.min_diameter)
+            data_json.update({
+                "confidence": confidence,
+                "min_diameter": min_diameter
+            })
+            data_json["type"] = "layer"
             
         # Write bbox coordinates to json
         json_file_path = export_path / f"{self.label_layer_name}_layer_data.json"
@@ -1168,11 +1209,11 @@ class OrganoidAnalyzerWidget(QWidget):
                 frame_idx = int(label_layer_name.split('_')[1][5:])
                 feature_sizes = {}
                 for feature in selected_features:
-                    if not feature in frame_layer.properties:
-                        show_warning(f"Feature {feature} not found for layer {label_layer_name}. Skipping...")
-                        continue
-                    features_to_export[feature].extend(frame_layer.properties[feature])
-                    feature_sizes[feature] = len(frame_layer.properties[feature])
+                    if feature in frame_layer.properties:
+                        features_to_export[feature].extend(frame_layer.properties[feature])
+                        feature_sizes[feature] = len(frame_layer.properties[feature])
+                    else:
+                        feature_sizes[feature] = 0
                 uniform_size = max(feature_sizes.values())
                 features_to_export['frame_idx'].extend([frame_idx] * uniform_size)
                 for feature, cur_size in feature_sizes.items():
@@ -1206,7 +1247,6 @@ class OrganoidAnalyzerWidget(QWidget):
         fd.setFileMode(QFileDialog.AnyFile)
         if fd.exec():
             model_path = fd.selectedFiles()[0]
-        import shutil
         shutil.copy2(model_path, settings.MODELS_DIR)
         model_name = utils.add_to_dict(model_path)
         self.model_selection.addItem(model_name)
@@ -1228,6 +1268,8 @@ class OrganoidAnalyzerWidget(QWidget):
         # check if OrganoiDL instance exists - create it if not and set there current boxes, scores and ids
         if not self.cur_shapes_layer:
             raise ValueError("No current shapes layer found for rerun.")    
+        if 'napari-organoid-analyzer:_rerun' in self.cur_shapes_layer.metadata:
+            return
         if self.organoiDL.img_scale[0]==0: self.organoiDL.set_scale(self.cur_shapes_layer.scale)
 
         # make sure to add info to cur_shapes_layer.metadata to differentiate this action from when user adds/removes boxes
@@ -1245,6 +1287,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 image_layer_name = self.label2im[old_shape_layer_name]
                 if not image_layer_name in self.viewer.layers:
                     raise RuntimeError(f"Internal error: image layer {image_layer_name} not found in viewer")
+                
                 image_shape = self.viewer.layers[image_layer_name].data.shape[1:3]
                 for frame_name in self.timelapses[timelapse_name]:
                     self.organoiDL.update_bboxes_scores(frame_name,
@@ -1273,6 +1316,7 @@ class OrganoidAnalyzerWidget(QWidget):
     def _on_diameter_slider_changed(self):
         """ Is called whenever user changes the Minimum Diameter slider """
         # get current value
+        print("Diameter slider changed")
         if self.diameter_textbox_changed: return
         self.min_diameter = self.min_diameter_slider.value()
         if self.cur_shapes_layer is not None:
@@ -1288,6 +1332,7 @@ class OrganoidAnalyzerWidget(QWidget):
     def _on_diameter_textbox_changed(self):
         """ Is called whenever user changes the minimum diameter from the textbox """
         # check if no labels loaded yet
+        print("Diameter textbox changed")
         if self.diameter_slider_changed: return
         self.min_diameter = int(self.min_diameter_textbox.text())
         self.diameter_textbox_changed = True
@@ -1301,6 +1346,7 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _on_confidence_slider_changed(self):
         """ Is called whenever user changes the confidence slider """
+        print("Confidence slider changed")
         if self.confidence_textbox_changed: return
         self.confidence = self.confidence_slider.value()/100
         self.confidence_slider_changed = True
@@ -1315,6 +1361,7 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _on_confidence_textbox_changed(self):
         """ Is called whenever user changes the confidence value from the textbox """
+        print("Confidence textbox changed")
         if self.confidence_slider_changed: return
         self.confidence = float(self.confidence_textbox.text())
         slider_conf_value = int(self.confidence*100)
@@ -1378,7 +1425,6 @@ class OrganoidAnalyzerWidget(QWidget):
                 # Add custom labels for timelapse
                 timelapse_name = f'{self.image_layer_name}-Labels-Custom-'
 
-                from qtpy.QtWidgets import QMessageBox
                 msg_box = QMessageBox(self)
                 msg_box.setWindowTitle("Create Custom Labels for Timelapse")
                 msg_box.setText("Do you want to create custom labels for all frames in the timelapse?")
@@ -1395,7 +1441,7 @@ class OrganoidAnalyzerWidget(QWidget):
                                 {'bbox_id': [], 'score': []},
                                 img_data.shape[1:3]
                             )
-                            self._update_detections(frame_layer_name, self.image_layer_name)
+                            self._update_detections(frame_layer_name, confidence=0.8, min_diameter=30, image_layer_name=self.image_layer_name)
                     curr_step = list(self.viewer.dims.current_step)
                     curr_step[0] = img_data.shape[0] - 1
                     self.viewer.dims.current_step = tuple(curr_step)
@@ -1418,7 +1464,7 @@ class OrganoidAnalyzerWidget(QWidget):
                         {'bbox_id': [], 'score': []},
                         img_data.shape[1:3]
                     )
-                    self._update_detections(frame_layer_name, self.image_layer_name)
+                    self._update_detections(frame_layer_name, confidence=0.8, min_diameter=30, image_layer_name=self.image_layer_name)
             else:
                 self.organoiDL.update_bboxes_scores(
                     new_layer_name,
@@ -1426,7 +1472,7 @@ class OrganoidAnalyzerWidget(QWidget):
                     {'bbox_id': [], 'score': []},
                     img_data.shape[:2]
                 )
-                self._update_detections(new_layer_name, self.image_layer_name)
+                self._update_detections(new_layer_name, confidence=0.8, min_diameter=30, image_layer_name=self.image_layer_name)
 
         else:
             new_layer_name = f'Guidance-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
@@ -1875,17 +1921,76 @@ class OrganoidAnalyzerWidget(QWidget):
         try:
             with open(file_path, "r") as f:
                 detection_data = json.load(f)
+                if not "type" in detection_data:
+                    raise ValueError("Invalid detection data format. Expected 'type' key with value 'layer' or 'timelapse'.")
+                if detection_data["type"] == "timelapse":
+                    for frame_name, frame_data in detection_data.items():
+                        if "detection_data" in frame_data:
+                            frame_data['detection_data'] = {
+                                int(k): v for k, v in frame_data['detection_data'].items()
+                            }
+                        if "segmentation_data" in frame_data:
+                            frame_data['segmentation_data'] = {
+                                int(k): v for k, v in frame_data.get('segmentation_data', {}).items()
+                            }
+                elif detection_data["type"] == "layer":
+                    if "detection_data" in detection_data:
+                        detection_data['detection_data'] = {
+                            int(k): v for k, v in detection_data['detection_data'].items()
+                        }
+                    if "segmentation_data" in detection_data:
+                        detection_data['segmentation_data'] = {
+                            int(k): v for k, v in detection_data.get('segmentation_data', {}).items()
+                        }
+                else:
+                    raise ValueError("Invalid detection data type. Expected 'layer' or 'timelapse'.")
         except Exception as e:
             show_error(f"Failed to load detections: {e}")
             return
-        
 
+        data_type = detection_data.pop("type", None)
         image_layer_name = self.image_layer_selection.currentText()
+        if not image_layer_name in self.viewer.layers:
+            show_error("No corresponding image layer found in the viewer")
+            return
         image_data = self.viewer.layers[image_layer_name].data
         image_layer_shape = self.viewer.layers[image_layer_name].data.shape
-        labels_layer_name = f"{image_layer_name}-Labels-Imported-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-        self.organoiDL.storage[labels_layer_name] = detection_data
-        self._update_detections(labels_layer_name, image_layer_name)
+
+        if self.organoiDL.img_scale[0] == 0:
+            self.organoiDL.set_scale(self.viewer.layers[image_layer_name].scale[:2])
+
+        if data_type == "layer":
+            # If the imported data is for a single layer
+            if list(image_layer_shape[:2]) != detection_data["image_size"]:
+                show_error(f"Import failed! Image size mismatch. current: {image_layer_shape[:2]}, imported: {detection_data['image_size']}")
+                return
+            labels_layer_name = f"{image_layer_name}-Labels-Imported-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
+            confidence = detection_data.pop('confidence', self.confidence)
+            min_diameter = detection_data.pop('min_diameter', self.min_diameter)
+            print(detection_data, confidence, min_diameter, image_layer_name)
+            self.organoiDL.storage[labels_layer_name] = detection_data
+            self._update_detections(labels_layer_name, confidence=confidence, min_diameter=min_diameter, image_layer_name=image_layer_name)
+        elif data_type == "timelapse":
+            # If the imported data is for a timelapse
+            if len(image_layer_shape) < 3:
+                show_error("Import failed! Selected image layer is not a timelapse.")
+                return
+            cur_total_frames = image_layer_shape[0]
+            cur_image_shape = list(image_layer_shape[1:3])
+            timelapse_name = f"{image_layer_name}-Labels-Imported-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
+            for frame_idx, frame_data in detection_data.items():
+                if int(frame_idx) >= cur_total_frames:
+                    show_warning(f"Skipping frame {frame_idx} as it exceeds the current timelapse length ({cur_total_frames} frames).")
+                    continue
+                if frame_data["image_size"] != cur_image_shape:
+                    show_warning(f"Skipping frame {frame_idx} due to image size mismatch. Current: {cur_image_shape}, Imported: {frame_data['image_size']}")
+                    continue
+                frame_name = f"TL_Frame{frame_idx}_{timelapse_name}"
+                confidence = frame_data.pop('confidence', self.confidence)
+                min_diameter = frame_data.pop('min_diameter', self.min_diameter)
+                self.organoiDL.storage[frame_name] = frame_data
+                self._update_detections(frame_name, confidence=confidence, min_diameter=min_diameter, image_layer_name=image_layer_name)
+
 
     def _on_cache_checkbox_changed(self, state):
         """Called when cache checkbox is toggled"""
@@ -2160,6 +2265,12 @@ class OrganoidAnalyzerWidget(QWidget):
         self.trackpy_memory.setValidator(QIntValidator(1, 99999))
         self.trackpy_memory.setText("3")
         trackpy_params_layout.addRow(QLabel("Memory:"), self.trackpy_memory)
+        
+        self.create_missing_detections_checkbox = QCheckBox("Create missing detections")
+        self.create_missing_detections_checkbox.setChecked(False)
+        self.create_missing_detections_checkbox.setToolTip("When disabled, only changes detection IDs. If enabled, can create new detections based on memory parameter.")
+        trackpy_params_layout.addRow(self.create_missing_detections_checkbox)
+        
         trackpy_params_widget.setLayout(trackpy_params_layout)
         self.tracking_params_stack.addWidget(trackpy_params_widget)
         params_container = QWidget()
@@ -2206,7 +2317,8 @@ class OrganoidAnalyzerWidget(QWidget):
                 return
             trackpy_params = {
                 'search_range': int(self.trackpy_search_range.text()),
-                'memory': int(self.trackpy_memory.text())
+                'memory': int(self.trackpy_memory.text()),
+                'create_missing_detections': self.create_missing_detections_checkbox.isChecked()
             }
             self.organoiDL.run_tracking(self.viewer.layers[image_layer_name].data, timelapse_shape_names, 'trackpy', trackpy_params)
         else:
@@ -2266,8 +2378,6 @@ class OrganoidAnalyzerWidget(QWidget):
         create a screenshot of the timelapse image, bounding box, and, if available,
         segmentation image overlayed together. Merge screenshots into a timelapse and save as mp4.
         """
-        from qtpy.QtWidgets import QFileDialog
-        import cv2
 
         if not self.cur_timelapse_name or self.cur_timelapse_name not in self.timelapses:
             show_error("No timelapse selected or timelapse not found.")
@@ -2370,11 +2480,7 @@ class OrganoidAnalyzerWidget(QWidget):
         """
         layer_names = [layer.name for layer in self.viewer.layers if type(layer) == layer_type]
         return layer_names
-        # if layer_names: 
-        #     return [] + layer_names
-        # else: 
-        #     return []
-
+    
     def _on_labels_layer_change(self):
         """
         Called when user changes layer of labels used for segmentation
