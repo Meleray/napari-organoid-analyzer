@@ -36,9 +36,17 @@ def init():
     global DETECTIONS_DIR
     DETECTIONS_DIR = CACHE_DIR / "detections-cache"
 
+    global ARCHITECTURES_DIR
+    ARCHITECTURES_DIR = CACHE_DIR / "architectures"
+
+    global TRAINED_MODELS_DIR
+    TRAINED_MODELS_DIR = CACHE_DIR / "trained_models"
+
     DETECTIONS_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+    ARCHITECTURES_DIR.mkdir(parents=True, exist_ok=True)
+    TRAINED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     global MODEL_TYPE
     MODEL_TYPE = '.pth'
@@ -58,7 +66,6 @@ def init():
                     "destination": ".mim/configs/rtmdet/rtmdet_l_organoid.py"
                     }
         # No config needed for SAMOS
-
 }
     
     # Add color definitions
