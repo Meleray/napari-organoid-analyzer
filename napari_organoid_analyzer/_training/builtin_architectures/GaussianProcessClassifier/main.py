@@ -1,35 +1,38 @@
-# K-Nearest Neighbors classifier architecture
-from sklearn.neighbors import KNeighborsClassifier
+# Gaussian Process Classifier architecture
+from sklearn.gaussian_process import GaussianProcessClassifier
+from sklearn.gaussian_process.kernels import RBF
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pickle
 import time
 
 
-class KNNClassifierArchitecture:
+class GaussianProcessClassifierArchitecture:
 
-    architecture_name = "KNN Classifier"
-    architecture_description = "K-Nearest Neighbors classifier based on organoid features. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html"
+    architecture_name = "Gaussian Process Classifier"
+    architecture_description = "Gaussian Process Classifier based on organoid features with Laplace approximation. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessClassifier.html"
     train_data_type = "features"
 
     config_parameters = {
-        "n_neighbors": "int",
-        "weights": ["uniform", "distance"],
-        "algorithm": ["auto", "ball_tree", "kd_tree", "brute"],
-        "leaf_size": "int",
-        "p": "float",
-        "metric": "str",
-        "n_jobs": "int", # -1 for None, otherwise positive integers
+        "optimizer": ["fmin_l_bfgs_b", "None"],
+        "n_restarts_optimizer": "int",
+        "max_iter_predict": "int",
+        "warm_start": "bool",
+        "copy_X_train": "bool",
+        "random_state": "int", # -1 for None
+        "multi_class": ["one_vs_rest", "one_vs_one"],
+        "n_jobs": "int", # -1 for all available cores
         "normalize_features": "bool",
     }
 
     default_config = {
-        "n_neighbors": 5,
-        "weights": "uniform",
-        "algorithm": "auto",
-        "leaf_size": 30,
-        "p": 2,
-        "metric": "minkowski",
+        "optimizer": "fmin_l_bfgs_b",
+        "n_restarts_optimizer": 0,
+        "max_iter_predict": 100,
+        "warm_start": False,
+        "copy_X_train": True,
+        "random_state": -1,
+        "multi_class": "one_vs_rest",
         "n_jobs": -1,
         "normalize_features": True,
     }
@@ -45,12 +48,13 @@ class KNNClassifierArchitecture:
         self.scaler = StandardScaler() if config.get('normalize_features', True) else None
         self.training_results = {}
         
-        self.n_neighbors = config['n_neighbors']
-        self.weights = config['weights']
-        self.algorithm = config['algorithm']
-        self.metric = config['metric']
-        self.leaf_size = config['leaf_size']
-        self.p = config['p']
+        self.optimizer = config['optimizer'] if config['optimizer'] != "None" else None
+        self.n_restarts_optimizer = config['n_restarts_optimizer']
+        self.max_iter_predict = config['max_iter_predict']
+        self.warm_start = config['warm_start']
+        self.copy_X_train = config['copy_X_train']
+        self.random_state = config['random_state'] if config['random_state'] != -1 else None
+        self.multi_class = config['multi_class']
         self.n_jobs = config['n_jobs'] if config['n_jobs'] != -1 else None
         self.normalize_features = config['normalize_features']
 
@@ -65,17 +69,21 @@ class KNNClassifierArchitecture:
         if self.normalize_features and self.scaler:
             X = self.scaler.fit_transform(X)
 
-        self.model = KNeighborsClassifier(
-            n_neighbors=self.n_neighbors,
-            weights=self.weights,
-            algorithm=self.algorithm,
-            leaf_size=self.leaf_size,
-            p=self.p,
-            metric=self.metric,
+        # For now kernel is fixed to default. TODO: allow kernel configuration
+        kernel = 1.0 * RBF(1.0)
+
+        self.model = GaussianProcessClassifier(
+            kernel=kernel,
+            optimizer=self.optimizer,
+            n_restarts_optimizer=self.n_restarts_optimizer,
+            max_iter_predict=self.max_iter_predict,
+            warm_start=self.warm_start,
+            copy_X_train=self.copy_X_train,
+            random_state=self.random_state,
+            multi_class=self.multi_class,
             n_jobs=self.n_jobs
         )
-        print(X)
-        print(y)
+        
         self.model.fit(X, y)
         
         training_time = time.time() - start_time
@@ -84,10 +92,10 @@ class KNNClassifierArchitecture:
             'training_time': training_time,
             'n_samples': len(training_data),
             'n_features': X.shape[1] if X.ndim > 1 else 1,
-            'n_neighbors_used': self.n_neighbors,
             'feature_normalization': self.normalize_features,
-            'distance_metric': self.metric,
-            'weight_function': self.weights
+            'multi_class_strategy': self.multi_class,
+            'n_restarts_optimizer': self.n_restarts_optimizer,
+            'log_marginal_likelihood': self.model.log_marginal_likelihood_value_ if hasattr(self.model, 'log_marginal_likelihood_value_') else None
         }
         
         print(f"Training completed in {training_time:.2f} seconds")
@@ -135,12 +143,13 @@ class KNNClassifierArchitecture:
             if key not in self.config:
                 self.config[key] = value
 
-        self.n_neighbors = self.config['n_neighbors']
-        self.weights = self.config['weights']
-        self.algorithm = self.config['algorithm']
-        self.metric = self.config['metric']
-        self.leaf_size = self.config['leaf_size']
-        self.p = self.config['p']
+        self.optimizer = self.config['optimizer'] if self.config['optimizer'] != "None" else None
+        self.n_restarts_optimizer = self.config['n_restarts_optimizer']
+        self.max_iter_predict = self.config['max_iter_predict']
+        self.warm_start = self.config['warm_start']
+        self.copy_X_train = self.config['copy_X_train']
+        self.random_state = self.config['random_state'] if self.config['random_state'] != -1 else None
+        self.multi_class = self.config['multi_class']
         self.n_jobs = self.config['n_jobs'] if self.config['n_jobs'] != -1 else None
         self.normalize_features = self.config['normalize_features']
 

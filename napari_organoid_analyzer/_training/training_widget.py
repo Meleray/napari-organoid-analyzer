@@ -216,7 +216,7 @@ class TrainingWidget(QWidget):
         self.train_button.clicked.connect(self.start_training)
         controls_layout.addWidget(self.train_button)
         
-        self.stop_button = QPushButton("Stop Training")
+        self.stop_button = QPushButton("Stop Training (do not use!")
         self.stop_button.clicked.connect(self.stop_training)
         self.stop_button.setEnabled(False)
         controls_layout.addWidget(self.stop_button)

@@ -1,36 +1,29 @@
-# K-Nearest Neighbors classifier architecture
-from sklearn.neighbors import KNeighborsClassifier
+# AdaBoost Classifier architecture
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import pickle
 import time
 
 
-class KNNClassifierArchitecture:
+class AdaBoostClassifierArchitecture:
 
-    architecture_name = "KNN Classifier"
-    architecture_description = "K-Nearest Neighbors classifier based on organoid features. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html"
+    architecture_name = "AdaBoost Classifier"
+    architecture_description = "AdaBoost Classifier based on organoid features using adaptive boosting with decision trees. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.AdaBoostClassifier.html"
     train_data_type = "features"
 
     config_parameters = {
-        "n_neighbors": "int",
-        "weights": ["uniform", "distance"],
-        "algorithm": ["auto", "ball_tree", "kd_tree", "brute"],
-        "leaf_size": "int",
-        "p": "float",
-        "metric": "str",
-        "n_jobs": "int", # -1 for None, otherwise positive integers
+        "n_estimators": "int",
+        "learning_rate": "float",
+        "random_state": "int", # -1 for None
         "normalize_features": "bool",
     }
 
     default_config = {
-        "n_neighbors": 5,
-        "weights": "uniform",
-        "algorithm": "auto",
-        "leaf_size": 30,
-        "p": 2,
-        "metric": "minkowski",
-        "n_jobs": -1,
+        "n_estimators": 50,
+        "learning_rate": 1.0,
+        "random_state": -1,
         "normalize_features": True,
     }
 
@@ -45,13 +38,9 @@ class KNNClassifierArchitecture:
         self.scaler = StandardScaler() if config.get('normalize_features', True) else None
         self.training_results = {}
         
-        self.n_neighbors = config['n_neighbors']
-        self.weights = config['weights']
-        self.algorithm = config['algorithm']
-        self.metric = config['metric']
-        self.leaf_size = config['leaf_size']
-        self.p = config['p']
-        self.n_jobs = config['n_jobs'] if config['n_jobs'] != -1 else None
+        self.n_estimators = config['n_estimators']
+        self.learning_rate = config['learning_rate']
+        self.random_state = config['random_state'] if config['random_state'] != -1 else None
         self.normalize_features = config['normalize_features']
 
     def train(self, training_data, training_labels):
@@ -65,17 +54,12 @@ class KNNClassifierArchitecture:
         if self.normalize_features and self.scaler:
             X = self.scaler.fit_transform(X)
 
-        self.model = KNeighborsClassifier(
-            n_neighbors=self.n_neighbors,
-            weights=self.weights,
-            algorithm=self.algorithm,
-            leaf_size=self.leaf_size,
-            p=self.p,
-            metric=self.metric,
-            n_jobs=self.n_jobs
+        self.model = AdaBoostClassifier(
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            random_state=self.random_state
         )
-        print(X)
-        print(y)
+        
         self.model.fit(X, y)
         
         training_time = time.time() - start_time
@@ -84,10 +68,9 @@ class KNNClassifierArchitecture:
             'training_time': training_time,
             'n_samples': len(training_data),
             'n_features': X.shape[1] if X.ndim > 1 else 1,
-            'n_neighbors_used': self.n_neighbors,
+            'n_estimators': self.n_estimators,
             'feature_normalization': self.normalize_features,
-            'distance_metric': self.metric,
-            'weight_function': self.weights
+            'learning_rate': self.learning_rate,
         }
         
         print(f"Training completed in {training_time:.2f} seconds")
@@ -130,18 +113,10 @@ class KNNClassifierArchitecture:
         self.scaler = model_data['scaler']
         self.config = model_data['config']
         self.training_results = model_data.get('training_results', {})
-        
-        for key, value in self.default_config.items():
-            if key not in self.config:
-                self.config[key] = value
 
-        self.n_neighbors = self.config['n_neighbors']
-        self.weights = self.config['weights']
-        self.algorithm = self.config['algorithm']
-        self.metric = self.config['metric']
-        self.leaf_size = self.config['leaf_size']
-        self.p = self.config['p']
-        self.n_jobs = self.config['n_jobs'] if self.config['n_jobs'] != -1 else None
+        self.n_estimators = self.config['n_estimators']
+        self.learning_rate = self.config['learning_rate']
+        self.random_state = self.config['random_state'] if self.config['random_state'] != -1 else None
         self.normalize_features = self.config['normalize_features']
 
         print(f"Model loaded from: {dirpath}")
