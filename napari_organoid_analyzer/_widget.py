@@ -1,4 +1,3 @@
-# Standard library imports
 import cv2
 import json
 import matplotlib.pyplot as plt
@@ -14,7 +13,6 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.request import urlretrieve
 
-# Third-party imports
 from napari import layers
 from napari.utils import progress
 from napari.utils.notifications import show_info, show_error, show_warning
@@ -49,7 +47,6 @@ from qtpy.QtWidgets import (
 from skimage.color import rgb2gray
 from skimage.io import imsave
 
-# Local imports
 from napari_organoid_analyzer import _utils as utils
 from napari_organoid_analyzer import session
 from napari_organoid_analyzer import settings
@@ -71,6 +68,7 @@ from napari_organoid_analyzer._widgets.dialogues import (
     SignalChannelDialog,
     SignalDialog,
 )
+from napari_organoid_analyzer._training.training_widget import TrainingWidget
 
 warnings.filterwarnings("ignore")
 
@@ -180,12 +178,14 @@ class OrganoidAnalyzerWidget(QWidget):
         self.detection_data_tab = QWidget()
         self.annotation_tab = QWidget()
         self.timelapse_tab = QWidget()
+        self.training_tab = TrainingWidget(parent=self)
 
         # Setup tabs for the widget
         self.tab_widget.addTab(self.configuration_tab, "Configuration")
         self.tab_widget.addTab(self.detection_data_tab, "Detection data")
         self.tab_widget.addTab(self.annotation_tab, "Add Annotation")
         self.tab_widget.addTab(self.timelapse_tab, "TL and Tracking")
+        self.tab_widget.addTab(self.training_tab, "Training")
 
         # Set up the layout for the configuration tab
         self.configuration_tab.setLayout(QVBoxLayout())
@@ -212,6 +212,7 @@ class OrganoidAnalyzerWidget(QWidget):
         self.annotation_tab.layout().addWidget(self._setup_labels_for_annotation_widget())
         self.annotation_tab.layout().addWidget(self._setup_create_annotation_feature_widget())
         self.annotation_tab.layout().addWidget(self._setup_continue_annotation_widget())
+        self.annotation_tab.layout().addStretch()
 
         # Set up the layout for the TL & Tracking tab
         self.timelapse_tab.setLayout(QVBoxLayout())
@@ -525,13 +526,11 @@ class OrganoidAnalyzerWidget(QWidget):
             confidence = self.confidence
         if min_diameter is None:
             min_diameter = self.min_diameter
-        print(f"Storage for {labels_layer_name}:\n{self.organoiDL.storage.get(labels_layer_name, {})}")
         bboxes, properties = self.organoiDL.apply_params(
             labels_layer_name,
             confidence,
             min_diameter,
         )
-        print(f"Updating detections with {len(bboxes)}!\n bboxes: {bboxes}, \nproperties: {properties}")
         self._update_num_organoids(len(bboxes))
         if labels_layer_name in self.shape_layer_names:
             self.viewer.layers[labels_layer_name].data = bboxes
@@ -1180,6 +1179,31 @@ class OrganoidAnalyzerWidget(QWidget):
             collated_mask_file_path = export_path / f"{self.label_layer_name}_collated_mask.npy"
             np.save(collated_mask_file_path, collated_masks)
 
+    def _get_features_from_layers(self, label_layer_list):
+        """Get features from the selected label layers as pd.DataFrame"""
+        features = {}
+        cur_total_size = 0
+        for label_layer_name in label_layer_list:
+            if not label_layer_name in self.viewer.layers:
+                raise RuntimeError(f"Label layer {label_layer_name} not found in viewer")
+            cur_layer = self.viewer.layers[label_layer_name]
+            new_total_size = cur_total_size
+            for feature in cur_layer.properties.keys():
+                if feature not in features:
+                    features[feature] = [None for i in range(cur_total_size)]
+                features[feature].extend(cur_layer.properties[feature])
+                new_total_size = max(new_total_size, len(features[feature]))
+            for feature in features.keys():
+                if len(features[feature]) < new_total_size:
+                    features[feature].extend([None] * (new_total_size - len(features[feature])))
+            cur_total_size = new_total_size
+        try:
+            features_df = pd.DataFrame(features)
+        except ValueError as e:
+            show_error(f"Error creating DataFrame from features: {e}")
+            return None
+        return features_df
+
     def _export_features(self, label_layer, export_path: Path, selected_features, timelapse_export):
         """Export selected features to CSV"""
         # Extract only the selected features
@@ -1316,7 +1340,6 @@ class OrganoidAnalyzerWidget(QWidget):
     def _on_diameter_slider_changed(self):
         """ Is called whenever user changes the Minimum Diameter slider """
         # get current value
-        print("Diameter slider changed")
         if self.diameter_textbox_changed: return
         self.min_diameter = self.min_diameter_slider.value()
         if self.cur_shapes_layer is not None:
@@ -1332,7 +1355,6 @@ class OrganoidAnalyzerWidget(QWidget):
     def _on_diameter_textbox_changed(self):
         """ Is called whenever user changes the minimum diameter from the textbox """
         # check if no labels loaded yet
-        print("Diameter textbox changed")
         if self.diameter_slider_changed: return
         self.min_diameter = int(self.min_diameter_textbox.text())
         self.diameter_textbox_changed = True
@@ -1346,7 +1368,6 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _on_confidence_slider_changed(self):
         """ Is called whenever user changes the confidence slider """
-        print("Confidence slider changed")
         if self.confidence_textbox_changed: return
         self.confidence = self.confidence_slider.value()/100
         self.confidence_slider_changed = True
@@ -1361,7 +1382,6 @@ class OrganoidAnalyzerWidget(QWidget):
 
     def _on_confidence_textbox_changed(self):
         """ Is called whenever user changes the confidence value from the textbox """
-        print("Confidence textbox changed")
         if self.confidence_slider_changed: return
         self.confidence = float(self.confidence_textbox.text())
         slider_conf_value = int(self.confidence*100)
@@ -1967,7 +1987,6 @@ class OrganoidAnalyzerWidget(QWidget):
             labels_layer_name = f"{image_layer_name}-Labels-Imported-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
             confidence = detection_data.pop('confidence', self.confidence)
             min_diameter = detection_data.pop('min_diameter', self.min_diameter)
-            print(detection_data, confidence, min_diameter, image_layer_name)
             self.organoiDL.storage[labels_layer_name] = detection_data
             self._update_detections(labels_layer_name, confidence=confidence, min_diameter=min_diameter, image_layer_name=image_layer_name)
         elif data_type == "timelapse":
@@ -2601,8 +2620,9 @@ class OrganoidAnalyzerWidget(QWidget):
 
         # Select labels layer
         hbox_config = QHBoxLayout()
+        hbox_config.addWidget(QLabel("Labels Layer:"), 1)
         self.annotation_image_layer_selection = QComboBox()
-        hbox_config.addWidget(self.annotation_image_layer_selection, 2)
+        hbox_config.addWidget(self.annotation_image_layer_selection, 4)
         vbox.addLayout(hbox_config)
         
         # Run for entire timelapse checkbox
@@ -2668,12 +2688,10 @@ class OrganoidAnalyzerWidget(QWidget):
         
         # Feature name
         hbox_config1 = QHBoxLayout()
-        feature_name_desc = QLabel('Annotation name: ', self)
+        hbox_config1.addWidget(QLabel('Annotation name:'), 1)
         self.resume_feature_name = QComboBox()
         for ft in self._load_annotation_features():
             self.resume_feature_name.addItem(ft)
-        
-        hbox_config1.addWidget(feature_name_desc, 1)
         hbox_config1.addWidget(self.resume_feature_name, 4)
         vbox.addLayout(hbox_config1)
 
@@ -2683,15 +2701,12 @@ class OrganoidAnalyzerWidget(QWidget):
         delete_feature.clicked.connect(self._on_delete_annotation_feature)
         delete_feature.setStyleSheet("border: 0px")
 
-        hbox_config2 = QHBoxLayout()
         start_annotation = QPushButton('Continue annotating')
         start_annotation.clicked.connect(self._on_continue_annotation)
         start_annotation.setStyleSheet("border: 0px")
 
-        hbox_config2.addWidget(delete_feature, 2)
-        hbox_config2.addWidget(start_annotation, 2)
-        # hbox_config2.addSpacing(15)
-        # hbox_config2.addStretch(1)   
+        hbox_config2.addWidget(delete_feature)
+        hbox_config2.addWidget(start_annotation)
         vbox.addLayout(hbox_config2) 
 
         widget.setLayout(vbox)

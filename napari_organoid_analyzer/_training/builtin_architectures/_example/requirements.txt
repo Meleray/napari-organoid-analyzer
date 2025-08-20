@@ -1,0 +1,4 @@
+# Here you can define other libraries that are required for your architecture.
+# These libraries will be installed when the architecture is selected in the GUI.
+# WARNING: Make sure that these libraries are compatible with the napari-organoid-analyzer as the tool is not designed to handle library conflicts.
+# If you suspect that there may be conflicts, manual installation and conflict resolution is recommended.
