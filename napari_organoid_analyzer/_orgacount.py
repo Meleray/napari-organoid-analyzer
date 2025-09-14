@@ -331,7 +331,6 @@ class OrganoiDL():
             Optional signal fields for the image
         """
         showed_ids = self.storage.get(shapes_name, {}).get('displayed_ids', [])
-        assert len(bboxes) == len(showed_ids), "Number of bboxes must match number of stored displayed IDs"
         signal_masks = {}
         if len(bboxes) == 0:
             pred_mask = np.array([])
