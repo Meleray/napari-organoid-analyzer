@@ -23,6 +23,8 @@ import json
 import copy
 import scipy
 from scipy.spatial.distance import cdist
+from skimage.measure import regionprops, label
+from skimage.feature import graycomatrix, graycoprops
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 DENSITY_K_NEIGHBORS = 5  # You can adjust this value as needed
@@ -318,113 +320,278 @@ class OrganoiDL():
 
     def run_segmentation(self, img, shapes_name, bboxes, signal_fields):
         """
-        Runs segmentation pipeline for selected image, based on previously detected bboxes
+        Runs segmentation pipeline for selected image, based on previously detected bboxes.
+        Optimized to minimize SAM set_image calls: 1 for main image + 1 per signal.
+        
+        Processing steps:
+        1. Set image once for main image, predict all masks and compute features
+        2. For each signal: set image once, predict all masks and compute signal features
+        
         Inputs
         ----------
         img: Numpy array of size [H, W, 3]
             The input image
         shapes_name: str
             Name of shape layer
-        bbooxes: Numpy array of size [N, 4]
+        bboxes: Numpy array of size [N, 4]
             Array of all predicted bboxes in xyxy format
-        signal_field: dict({signal_name: signal_field})
+        signal_fields: dict({signal_name: signal_field})
             Optional signal fields for the image
+            
+        Returns
+        ----------
+        collated_mask: Numpy array of size [H, W, 3]
+            Collated instance segmentation mask with RGB colors
+        collated_signal_masks: dict({signal_name: Numpy array of size [H, W]})
+            Collated signal masks (binary, value 255)
         """
         showed_ids = self.storage.get(shapes_name, {}).get('displayed_ids', [])
-        signal_masks = {}
+        assert len(bboxes) == len(showed_ids), "Number of bboxes must match number of stored displayed IDs"
+        
+        # Initialize collated masks
+        image_shape = self.storage[shapes_name]['image_size']
+        collated_mask = np.zeros((*image_shape, 3), dtype=np.uint8)
+        collated_signal_masks = {signal_name: np.zeros(image_shape, dtype=np.uint8) for signal_name in signal_fields.keys()}
+        
         if len(bboxes) == 0:
-            pred_mask = np.array([])
-        else:
-            img = _utils.normalize(img)
-            bboxes = torch.Tensor(bboxes)
-            bboxes = torch.stack((
-                bboxes[:, 1],
-                bboxes[:, 0],
-                bboxes[:, 3],
-                bboxes[:, 2]
-            ), dim=1).to(self.device)
-            self.sam_predictor.set_image(img)
-            bboxes = self.sam_predictor.transform.apply_boxes_torch(bboxes, img.shape[:2])
+            return collated_mask, collated_signal_masks
+        
+        img = _utils.normalize(img)
+        grayscale_img = img[:, :, 0] if img.ndim == 3 else img
+        
+        # Initialize segmentation data storage for all organoids
+        for curr_id in showed_ids:
+            self.storage[shapes_name]['segmentation_data'][curr_id] = {}
+        
+        # STEP 1: Set image once, predict masks and compute features
+        self.sam_predictor.set_image(img)
+        
+        for idx in progress(range(len(bboxes)), desc="Segmenting organoids (main)"):
+            curr_id = showed_ids[idx]
+            bbox = bboxes[idx]
+            
+            # Prepare bbox for SAM
+            bbox_tensor = torch.Tensor([[bbox[1], bbox[0], bbox[3], bbox[2]]]).to(self.device)
+            bbox_transformed = self.sam_predictor.transform.apply_boxes_torch(bbox_tensor, img.shape[:2])
+            
+            # Predict mask
             pred_mask, _, _ = self.sam_predictor.predict_torch(
                 point_coords=None,
                 point_labels=None,
-                boxes=bboxes,
+                boxes=bbox_transformed,
                 multimask_output=False
             )
             pred_mask = np.squeeze(pred_mask.cpu().numpy().astype(np.uint8))
-            if len(pred_mask.shape) == 2:
-                pred_mask = np.expand_dims(pred_mask, axis=0)
-
-            for signal_name, signal_field in progress(signal_fields.items(), desc="signals"):
-                self.sam_predictor.set_image(signal_field)
+            
+            # Store mask as polygon
+            self.storage[shapes_name]['segmentation_data'][curr_id]['mask'] = json.dumps(mask2polygon(pred_mask))
+            
+            # Compute features immediately
+            curr_features = self._compute_features(
+                pred_mask,
+                curr_id,
+                grayscale_img,
+                is_signal=False
+            )
+            self.storage[shapes_name]['detection_data'][curr_id].update(curr_features)
+            
+            # Add to collated mask with unique color
+            color = self._get_instance_color(idx)
+            collated_mask[pred_mask > 0] = color
+        
+        # STEP 2: Process each signal field (one set_image per signal)
+        for signal_name, signal_field in progress(signal_fields.items(), desc="Processing signals"):
+            # Set image once per signal
+            self.sam_predictor.set_image(signal_field)
+            signal_field_gray = signal_field[:, :, 0]
+            
+            # Predict all signal masks for this signal
+            for idx in progress(range(len(bboxes)), desc=f"Segmenting ({signal_name})"):
+                curr_id = showed_ids[idx]
+                bbox = bboxes[idx]
+                
+                # Prepare bbox for SAM
+                bbox_tensor = torch.Tensor([[bbox[1], bbox[0], bbox[3], bbox[2]]]).to(self.device)
+                bbox_transformed = self.sam_predictor.transform.apply_boxes_torch(bbox_tensor, signal_field.shape[:2])
+                
+                # Predict signal mask
                 signal_mask, _, _ = self.sam_predictor.predict_torch(
                     point_coords=None,
                     point_labels=None,
-                    boxes=bboxes,
+                    boxes=bbox_transformed,
                     multimask_output=False
                 )
                 signal_mask = np.squeeze(signal_mask.cpu().numpy().astype(np.uint8))
-                if len(signal_mask.shape) == 2:
-                    signal_mask = np.expand_dims(pred_mask, axis=0)
-                assert len(pred_mask) == len(signal_mask)
-                signal_masks[signal_name] = signal_mask
+                
+                # Store signal mask as polygon
+                self.storage[shapes_name]['segmentation_data'][curr_id][f'{signal_name}_mask'] = json.dumps(mask2polygon(signal_mask))
+                
+                # Add to collated signal mask (use 255 for visibility)
+                collated_signal_masks[signal_name][signal_mask > 0] = 255
+                
+                # Compute and add signal features incrementally
+                signal_features = self._compute_features(
+                    signal_mask,
+                    curr_id,
+                    signal_field_gray,
+                    is_signal=True,
+                    signal_name=signal_name
+                )
+                self.storage[shapes_name]['detection_data'][curr_id].update(signal_features)
         
-        features = []
-        for idx in range(len(showed_ids)):
-            curr_id = showed_ids[idx]
-            self.storage[shapes_name]['segmentation_data'][curr_id] = {}
-            self.storage[shapes_name]['segmentation_data'][curr_id]['mask'] = json.dumps(mask2polygon(pred_mask[idx]))
-            if len(signal_masks) > 0:
-                for signal_name in signal_masks.keys():
-                    self.storage[shapes_name]['segmentation_data'][curr_id][f'{signal_name}_mask'] = json.dumps(mask2polygon(signal_masks[signal_name][idx]))
-            curr_features = self._compute_features(
-                pred_mask[idx], 
-                curr_id, 
-                {signal_name: (signal_mask[idx], signal_fields[signal_name][:, :, 0]) for signal_name, signal_mask in signal_masks.items()}, 
-            )
-            self.storage[shapes_name]['detection_data'][curr_id].update(curr_features)
-            features.append(curr_features)
         self._fill_default_data(shapes_name)
-        return pred_mask, signal_masks
+        return collated_mask, collated_signal_masks
     
-    def _compute_features(self, mask, org_id, signal_data):
+    def _get_instance_color(self, instance_idx):
+        """Generate a unique color for each instance"""
+        np.random.seed(instance_idx + 1)
+        return np.random.randint(50, 255, size=3, dtype=np.uint8)
+    
+    def _compute_features(self, mask, org_id, grayscale_image, is_signal=False, signal_name=None):
         """
-        Computes mask-based features for detected organoids
+        Computes mask-based features for detected organoids.
+        Can work incrementally: first compute main image features, then add signal features.
         
         Inputs
         ----------
         mask: Numpy array of size [H, W]
             The mask of a single organoid detection
-        signal_data: Dict({signal_name: (mask, field)})
-            Masks and fields for signals
+        org_id: int
+            The organoid ID
+        grayscale_image: Numpy array of size [H, W]
+            Grayscale image for feature calculation
+        is_signal: bool, default False
+            If True, compute signal-specific features only
+            If False, compute all geometric, intensity, and texture features
+        signal_name: str, optional
+            Name of the signal (required if is_signal=True)
+        
+        Returns
+        ----------
+        features: dict
+            Dictionary of computed features
         """
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        area = [cv2.contourArea(contour) for contour in contours]
-        id_selected = np.argmax(area)
-        if len(contours) > 1:
-            logging.warning(f"Multiple contours found for organoid ID#{org_id}. Using the contour with largest area: {area[id_selected]}")
-        perimeter = cv2.arcLength(contours[id_selected], True)
-        if perimeter > 0:
-            roundness = (4 * np.pi * area[id_selected]) / (perimeter ** 2)
-        else:
-            roundness = 0
-        features = {
-            'Area (pixel units)': float(area[id_selected]),
-            'Perimeter (pixel units)': float(perimeter),
-            'Roundness': float(roundness)
-        }
-        for signal_name, (signal_mask, signal_field) in signal_data.items():
-            signal_contours, _ = cv2.findContours(signal_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Ensure mask is binary and label it
+        labeled_mask = label(mask > 0)
+        
+        if labeled_mask.max() == 0:
+            logging.warning(f"Empty mask found for organoid ID#{org_id}")
+            return {}
+        
+        features = {}
+        
+        if is_signal:
+            # SIGNAL MODE: Compute only signal-specific features
+            if signal_name is None:
+                logging.error(f"signal_name must be provided when is_signal=True for organoid ID#{org_id}")
+                return {}
+            
+            # Use OpenCV to compute signal area
+            signal_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             total_signal_area = sum([cv2.contourArea(contour) for contour in signal_contours])
-            signal_total_intensity = np.sum(signal_mask * signal_field) / 255.0
-            signal_mean_intensity = signal_total_intensity / total_signal_area
+            
+            if total_signal_area > 0:
+                signal_total_intensity = np.sum(mask * grayscale_image) / 255.0
+                signal_mean_intensity = signal_total_intensity / total_signal_area
+            else:
+                signal_total_intensity = 0
+                signal_mean_intensity = 0
+            
             features.update({
                 f"{signal_name} area (pixel units)": float(total_signal_area),
                 f"{signal_name} mean intensity": float(signal_mean_intensity),
                 f"{signal_name} total intensity": float(signal_total_intensity),
-                #f"{signal_name} components": int(len(signal_contours))
             })
+            
+        else:
+            # MAIN IMAGE MODE: Compute all features
+            
+            # Get regionprops with intensity image
+            if grayscale_image is not None and grayscale_image.shape == mask.shape:
+                props = regionprops(labeled_mask, intensity_image=grayscale_image)
+            else:
+                props = regionprops(labeled_mask)
+            
+            if len(props) == 0:
+                return {}
+            
+            # Get the largest region if multiple exist
+            if len(props) > 1:
+                logging.warning(f"Multiple regions found for organoid ID#{org_id}. Using the region with largest area.")
+                props = [max(props, key=lambda x: x.area)]
+            
+            prop = props[0]
+            
+            # Basic geometric features
+            features = {
+                'Area (pixel units)': float(prop.area),
+                'Perimeter (pixel units)': float(prop.perimeter),
+                'Roundness': float((4 * np.pi * prop.area) / (prop.perimeter ** 2)) if prop.perimeter > 0 else 0,
+            }
+            
+            # Extended geometric features
+            features.update({
+                'area_bbox': float(prop.area_bbox),
+                'area_convex': float(prop.area_convex),
+                'area_filled': float(prop.area_filled),
+                'axis_major_length': float(prop.major_axis_length),
+                'axis_minor_length': float(prop.minor_axis_length),
+                'eccentricity': float(prop.eccentricity),
+                'equivalent_diameter': float(prop.equivalent_diameter_area),
+                'feret_diameter_max': float(prop.feret_diameter_max),
+                'perimeter_crofton': float(prop.perimeter_crofton),
+                'solidity': float(prop.solidity),
+                'extent': float(prop.extent),
+                'aspect_ratio': float(prop.major_axis_length / prop.minor_axis_length) if prop.minor_axis_length > 0 else 0,
+                'compactness': float((prop.perimeter ** 2) / prop.area) if prop.area > 0 else 0,
+            })
+            
+            # Intensity features
+            if grayscale_image is not None and hasattr(prop, 'intensity_mean'):
+                features.update({
+                    'mean_intensity': float(prop.intensity_mean),
+                    'max_intensity': float(prop.intensity_max),
+                    'min_intensity': float(prop.intensity_min),
+                })
+                
+                # Hu moments
+                if hasattr(prop, 'moments_hu'):
+                    for i in range(min(3, len(prop.moments_hu))):
+                        features[f'intensity_moments_hu_{i}'] = float(prop.moments_hu[i])
+                
+                if hasattr(prop, 'moments_weighted_hu'):
+                    features['intensity_moments_weighted_hu_0'] = float(prop.moments_weighted_hu[0])
+            
+            # Texture features using GLCM
+            if grayscale_image is not None and grayscale_image.shape == mask.shape:
+                try:
+                    texture_image = grayscale_image.copy()
+                    texture_image[mask == 0] = 0
+                    
+                    # Ensure image is in proper range for GLCM
+                    if texture_image.max() > 0:
+                        texture_image = ((texture_image - texture_image.min()) / 
+                                       (texture_image.max() - texture_image.min()) * 255).astype(np.uint8)
+                    
+                    distances = [1, 5, 10, 20]
+                    angles = [0, 0.5 * np.pi, np.pi, 1.5 * np.pi]
+                    
+                    for dist in distances:
+                        try:
+                            glcm = graycomatrix(texture_image, distances=[dist], angles=angles,
+                                              levels=256, symmetric=True, normed=True)
+                            
+                            features[f'contrast_d{dist}'] = float(graycoprops(glcm, 'contrast')[0, 0])
+                            features[f'homogeneity_d{dist}'] = float(graycoprops(glcm, 'homogeneity')[0, 0])
+                            features[f'correlation_d{dist}'] = float(graycoprops(glcm, 'correlation')[0, 0])
+                            features[f'energy_d{dist}'] = float(graycoprops(glcm, 'energy')[0, 0])
+                            features[f'dissimilarity_d{dist}'] = float(graycoprops(glcm, 'dissimilarity')[0, 0])
+                            features[f'asm_d{dist}'] = float(graycoprops(glcm, 'ASM')[0, 0])
+                        except Exception as e:
+                            logging.warning(f"Failed to compute GLCM features at distance {dist} for organoid ID#{org_id}: {e}")
+                except Exception as e:
+                    logging.warning(f"Failed to compute texture features for organoid ID#{org_id}: {e}")
+        
         return features
 
 

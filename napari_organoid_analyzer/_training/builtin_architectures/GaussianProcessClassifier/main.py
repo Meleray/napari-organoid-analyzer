@@ -2,6 +2,7 @@
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import RBF
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 import numpy as np
 import pickle
 import time
@@ -23,6 +24,7 @@ class GaussianProcessClassifierArchitecture:
         "multi_class": ["one_vs_rest", "one_vs_one"],
         "n_jobs": "int", # -1 for all available cores
         "normalize_features": "bool",
+        "cv_folds": "int",
     }
 
     default_config = {
@@ -35,6 +37,7 @@ class GaussianProcessClassifierArchitecture:
         "multi_class": "one_vs_rest",
         "n_jobs": -1,
         "normalize_features": True,
+        "cv_folds": 0,
     }
 
     def __init__(self, config):
@@ -57,6 +60,7 @@ class GaussianProcessClassifierArchitecture:
         self.multi_class = config['multi_class']
         self.n_jobs = config['n_jobs'] if config['n_jobs'] != -1 else None
         self.normalize_features = config['normalize_features']
+        self.cv_folds = config['cv_folds']
 
     def train(self, training_data, training_labels):
 
@@ -83,6 +87,10 @@ class GaussianProcessClassifierArchitecture:
             multi_class=self.multi_class,
             n_jobs=self.n_jobs
         )
+        
+        if self.cv_folds > 0:
+            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='accuracy')
+            print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +- {cv_scores.std():.4f}")
         
         self.model.fit(X, y)
         
@@ -152,5 +160,6 @@ class GaussianProcessClassifierArchitecture:
         self.multi_class = self.config['multi_class']
         self.n_jobs = self.config['n_jobs'] if self.config['n_jobs'] != -1 else None
         self.normalize_features = self.config['normalize_features']
+        self.cv_folds = self.config.get('cv_folds', 0)
 
         print(f"Model loaded from: {dirpath}")

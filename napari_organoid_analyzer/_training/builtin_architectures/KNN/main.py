@@ -1,6 +1,7 @@
 # K-Nearest Neighbors classifier architecture
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 import numpy as np
 import pickle
 import time
@@ -21,6 +22,7 @@ class KNNClassifierArchitecture:
         "metric": "str",
         "n_jobs": "int", # -1 for None, otherwise positive integers
         "normalize_features": "bool",
+        "cv_folds": "int",
     }
 
     default_config = {
@@ -32,6 +34,7 @@ class KNNClassifierArchitecture:
         "metric": "minkowski",
         "n_jobs": -1,
         "normalize_features": True,
+        "cv_folds": 0,
     }
 
     def __init__(self, config):
@@ -53,6 +56,7 @@ class KNNClassifierArchitecture:
         self.p = config['p']
         self.n_jobs = config['n_jobs'] if config['n_jobs'] != -1 else None
         self.normalize_features = config['normalize_features']
+        self.cv_folds = config['cv_folds']
 
     def train(self, training_data, training_labels):
 
@@ -74,6 +78,11 @@ class KNNClassifierArchitecture:
             metric=self.metric,
             n_jobs=self.n_jobs
         )
+        
+        if self.cv_folds > 0:
+            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='accuracy')
+            print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +- {cv_scores.std():.4f}")
+        
         print(X)
         print(y)
         self.model.fit(X, y)
@@ -143,5 +152,6 @@ class KNNClassifierArchitecture:
         self.p = self.config['p']
         self.n_jobs = self.config['n_jobs'] if self.config['n_jobs'] != -1 else None
         self.normalize_features = self.config['normalize_features']
+        self.cv_folds = self.config.get('cv_folds', 0)
 
         print(f"Model loaded from: {dirpath}")

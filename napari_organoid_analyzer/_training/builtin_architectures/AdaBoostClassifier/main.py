@@ -2,6 +2,7 @@
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 import numpy as np
 import pickle
 import time
@@ -18,6 +19,7 @@ class AdaBoostClassifierArchitecture:
         "learning_rate": "float",
         "random_state": "int", # -1 for None
         "normalize_features": "bool",
+        "cv_folds": "int",
     }
 
     default_config = {
@@ -25,6 +27,7 @@ class AdaBoostClassifierArchitecture:
         "learning_rate": 1.0,
         "random_state": -1,
         "normalize_features": True,
+        "cv_folds": 0,
     }
 
     def __init__(self, config):
@@ -42,6 +45,7 @@ class AdaBoostClassifierArchitecture:
         self.learning_rate = config['learning_rate']
         self.random_state = config['random_state'] if config['random_state'] != -1 else None
         self.normalize_features = config['normalize_features']
+        self.cv_folds = config['cv_folds']
 
     def train(self, training_data, training_labels):
 
@@ -59,6 +63,10 @@ class AdaBoostClassifierArchitecture:
             learning_rate=self.learning_rate,
             random_state=self.random_state
         )
+        
+        if self.cv_folds > 0:
+            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='accuracy')
+            print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +- {cv_scores.std():.4f}")
         
         self.model.fit(X, y)
         
@@ -118,5 +126,6 @@ class AdaBoostClassifierArchitecture:
         self.learning_rate = self.config['learning_rate']
         self.random_state = self.config['random_state'] if self.config['random_state'] != -1 else None
         self.normalize_features = self.config['normalize_features']
+        self.cv_folds = self.config.get('cv_folds', 0)
 
         print(f"Model loaded from: {dirpath}")

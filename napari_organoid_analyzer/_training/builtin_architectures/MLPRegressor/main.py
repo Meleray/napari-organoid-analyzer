@@ -1,5 +1,5 @@
-# Multi-layer Perceptron Classifier architecture
-from sklearn.neural_network import MLPClassifier
+# Multi-layer Perceptron Regressor architecture
+from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
 import numpy as np
@@ -8,10 +8,10 @@ import time
 import ast
 
 
-class MLPClassifierArchitecture:
+class MLPRegressorArchitecture:
 
-    architecture_name = "MLP Classifier"
-    architecture_description = "Multi-layer Perceptron Classifier based on organoid features using neural networks. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.neural_network.MLPClassifier.html"
+    architecture_name = "MLP Regressor"
+    architecture_description = "Multi-layer Perceptron Regressor based on organoid features using neural networks. For further information, see https://scikit-learn.org/stable/modules/generated/sklearn.neural_network.MLPRegressor.html"
     train_data_type = "features"
 
     config_parameters = {
@@ -127,7 +127,7 @@ class MLPClassifierArchitecture:
         if self.normalize_features and self.scaler:
             X = self.scaler.fit_transform(X)
 
-        self.model = MLPClassifier(
+        self.model = MLPRegressor(
             hidden_layer_sizes=self.hidden_layer_sizes,
             activation=self.activation,
             solver=self.solver,
@@ -154,8 +154,9 @@ class MLPClassifierArchitecture:
         )
         
         if self.cv_folds > 0:
-            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='accuracy')
-            print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +- {cv_scores.std():.4f}")
+            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='neg_mean_squared_error')
+            cv_rmse = np.sqrt(-cv_scores)
+            print(f"Cross-validation RMSE: {cv_rmse.mean():.4f} +- {cv_rmse.std():.4f}")
         
         self.model.fit(X, y)
         
@@ -247,3 +248,4 @@ class MLPClassifierArchitecture:
         self.cv_folds = self.config.get('cv_folds', 0)
 
         print(f"Model loaded from: {dirpath}")
+

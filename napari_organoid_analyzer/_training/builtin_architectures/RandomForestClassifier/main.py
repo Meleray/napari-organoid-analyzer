@@ -1,6 +1,7 @@
 # Random Forest Classifier architecture
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 import numpy as np
 import pickle
 import time
@@ -33,6 +34,7 @@ class RandomForestClassifierArchitecture:
         "ccp_alpha": "float",
         "max_samples": "float", # -1 for None, otherwise positive integers
         "normalize_features": "bool",
+        "cv_folds": "int",
     }
 
     default_config = {
@@ -56,6 +58,7 @@ class RandomForestClassifierArchitecture:
         "ccp_alpha": 0.0,
         "max_samples": -1,
         "normalize_features": True,
+        "cv_folds": 0,
     }
 
     def __init__(self, config):
@@ -96,6 +99,7 @@ class RandomForestClassifierArchitecture:
         self.ccp_alpha = config['ccp_alpha']
         self.max_samples = self.convert_to_int(config['max_samples']) if config['max_samples'] != -1 else None
         self.normalize_features = config['normalize_features']
+        self.cv_folds = config['cv_folds']
 
     @staticmethod
     def convert_to_int(value):
@@ -135,6 +139,10 @@ class RandomForestClassifierArchitecture:
             ccp_alpha=self.ccp_alpha,
             max_samples=self.max_samples
         )
+        
+        if self.cv_folds > 0:
+            cv_scores = cross_val_score(self.model, X, y, cv=self.cv_folds, scoring='accuracy')
+            print(f"Cross-validation accuracy: {cv_scores.mean():.4f} +- {cv_scores.std():.4f}")
         
         self.model.fit(X, y)
         
@@ -225,4 +233,5 @@ class RandomForestClassifierArchitecture:
         self.ccp_alpha = self.config['ccp_alpha']
         self.max_samples = self.convert_to_int(self.config['max_samples']) if self.config['max_samples'] != -1 else None
         self.normalize_features = self.config['normalize_features']
+        self.cv_folds = self.config.get('cv_folds', 0)
         print(f"Model loaded from: {dirpath}")

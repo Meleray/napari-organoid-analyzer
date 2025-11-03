@@ -52,7 +52,6 @@ from napari_organoid_analyzer import session
 from napari_organoid_analyzer import settings
 from napari_organoid_analyzer._orgacount import OrganoiDL
 from napari_organoid_analyzer._utils import (
-    collate_instance_masks,
     compute_image_hash,
     convert_boxes_from_napari_view,
     convert_boxes_to_napari_view,
@@ -779,13 +778,11 @@ class OrganoidAnalyzerWidget(QWidget):
                 if frame.shape[2] == 4:
                     frame = frame[:, :, :3]
                 frame_signal = {signal_name: signal_field[i] for signal_name, signal_field in merged_signal_data.items()}
-                masks, signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, frame_signal)
-                final_image[i] = collate_instance_masks(masks, color=True)
-                for signal_name, signal_seg in signal_masks.items():
-                    final_signal_seg[signal_name][i] = collate_instance_masks(signal_seg, color=False)
-                if len(labels_layer.properties['bbox_id']) != masks.shape[0] or len(labels_layer.properties['score']) != masks.shape[0]:
-                    show_error(f"Mismatch in number of masks and labels for layer {frame_layer_name}. Features have not been updated")
-                    continue
+                # run_segmentation now returns collated masks directly
+                collated_mask, collated_signal_masks = self.organoiDL.run_segmentation(frame, frame_layer_name, bboxes, frame_signal)
+                final_image[i] = collated_mask
+                for signal_name, signal_seg in collated_signal_masks.items():
+                    final_signal_seg[signal_name][i] = signal_seg
                 self._update_detections(frame_layer_name, image_layer_name=image_name)
 
 
@@ -812,15 +809,13 @@ class OrganoidAnalyzerWidget(QWidget):
                 image_data = image_data[:, :, :3]
     
             segmentation_layer_name = f"Segmentation-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-            masks, signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
+            # run_segmentation now returns collated masks directly
+            collated_mask, collated_signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
     
-            self.viewer.add_image(collate_instance_masks(masks, color=True), name=segmentation_layer_name, blending='additive')
-            for signal_name, signal_mask in signal_masks.items():
+            self.viewer.add_image(collated_mask, name=segmentation_layer_name, blending='additive')
+            for signal_name, collated_signal_mask in collated_signal_masks.items():
                 signal_seg_layer_name = f"Segmentation-{signal_name}-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-                self.viewer.add_image(collate_instance_masks(signal_mask, color=False), name=signal_seg_layer_name, blending='additive', colormap="red")
-            if len(labels_layer.properties['bbox_id']) != masks.shape[0] or len(labels_layer.properties['score']) != masks.shape[0]:
-                show_error("Mismatch in number of masks and labels. Please rerun the segmentation.")
-                return
+                self.viewer.add_image(collated_signal_mask, name=signal_seg_layer_name, blending='additive', colormap="red")
             self._update_detections(self.label_layer_name, )
     
         self._update_detection_data_tab()

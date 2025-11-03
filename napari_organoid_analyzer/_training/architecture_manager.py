@@ -98,10 +98,14 @@ class ArchitectureManager:
         else:
             path_added = False
         
-        def cleanup():
+        def cleanup(delete_from_sys_modules=False):
             if path_added and parent_dir in sys.path:
                 sys.path.remove(parent_dir)
-        
+            if delete_from_sys_modules:
+                to_delete = [key for key in sys.modules if key == arch_package_name or key.startswith(arch_package_name + ".")]
+                for key in to_delete:
+                    del sys.modules[key]
+
         try:
             arch_package = importlib.import_module(arch_package_name)
             
@@ -138,7 +142,7 @@ class ArchitectureManager:
             cleanup()
             return None, None
     
-    def _parse_architecture_dir(self, arch_dir):
+    def _parse_architecture_dir(self, arch_dir, delete_from_sys_modules=False):
         """
         Parses an architecture directory to extract it as a Python module.
         """
@@ -160,6 +164,7 @@ class ArchitectureManager:
             dependencies = [dep.strip() for dep in dependencies if dep.strip()]
         
         arch_class, cleanup = self._import_arch_class(arch_dir)
+        print(f"Architecture class: {arch_class}")
         if arch_class is None:
             return None
         
@@ -192,10 +197,11 @@ class ArchitectureManager:
             
         except Exception as e:
             show_error(f"Failed to load architecture {arch_dir.name}: {str(e)}")
+            delete_from_sys_modules = True
             return None
         finally:
-            cleanup()
-    
+            cleanup(delete_from_sys_modules=delete_from_sys_modules)
+
     def install_dependencies(self, arch_name):
         """
         Install dependencies for a given architecture.

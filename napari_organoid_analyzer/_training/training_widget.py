@@ -23,6 +23,7 @@ import json
 
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional
+import sys
 
 
 # Class for storing info about trained models
@@ -786,7 +787,9 @@ class TrainingWidget(QWidget):
     def import_model(self):
         """Import a trained model from a file."""
         dialog = ModelImportDialog(self, self.architectures_manager, self.models_dir, is_import_mode=True)
-        dialog.exec_()
+        if dialog.exec_() == QDialog.Accepted:
+            self.refresh_architectures()
+            self.refresh_models()
 
     def show_model_info(self):
         """Show information about the selected model."""
@@ -1102,9 +1105,9 @@ class ArchitectureImportDialog(QDialog):
             if not arch_dir.exists() or not arch_dir.is_dir():
                 self.show_error("Selected path is not a valid directory")
                 return
-            
-            arch_info = self.architecture_manager._parse_architecture_dir(arch_dir)
-            
+
+            arch_info = self.architecture_manager._parse_architecture_dir(arch_dir, delete_from_sys_modules=True)
+
             if arch_info is None:
                 self.show_error("No valid architecture found in the selected directory. Please look at the standard output for more details on the error.")
                 return
@@ -1205,7 +1208,7 @@ class ArchitectureImportDialog(QDialog):
             target_dir = self.architecture_manager.architectures_dir / target_dir_name
             
             if target_dir.exists():
-                existing_arch_info = self.architecture_manager._parse_architecture_dir(target_dir)
+                existing_arch_info = self.architecture_manager._parse_architecture_dir(target_dir, delete_from_sys_modules=True)
 
                 # Adjust folder name to avoid conflicts
                 if existing_arch_info and existing_arch_info.name != arch_info.name:
@@ -1237,7 +1240,7 @@ class ModelConfigDialog(QDialog):
         super().__init__(parent)
         self.parent_widget = parent
         self.arch_info = arch_info
-        self.current_config = current_config
+        self.current_config = {**arch_info.default_config, **current_config}
         self.config_widgets = {}
         
         self.setWindowTitle(f"Configure {arch_info.name}")
@@ -1883,7 +1886,7 @@ class ModelImportDialog(QDialog):
             # Check for architecture directory
             arch_dir = model_dir / "architecture"
             if arch_dir.exists():
-                self.current_arch_info = self.architecture_manager._parse_architecture_dir(arch_dir)
+                self.current_arch_info = self.architecture_manager._parse_architecture_dir(arch_dir, delete_from_sys_modules=self.is_import_mode)
                 if self.current_arch_info is None:
                     self.show_error("Invalid architecture found in the selected directory")
                     return
@@ -1895,6 +1898,8 @@ class ModelImportDialog(QDialog):
             
         except Exception as e:
             self.show_error(f"Error parsing model directory: {str(e)}")
+            print([key for key in sys.modules.keys() if "architecture" in key])
+            raise
     
     def show_preview(self, model_metadata, arch_info):
         """Show model and architecture preview."""
@@ -2012,7 +2017,7 @@ class ModelImportDialog(QDialog):
             
             # Handle name conflicts for directory
             if target_dir.exists():
-                existing_arch_info = self.architecture_manager._parse_architecture_dir(target_dir)
+                existing_arch_info = self.architecture_manager._parse_architecture_dir(target_dir, delete_from_sys_modules=self.is_import_mode)
                 if existing_arch_info and existing_arch_info.name != arch_info.name:
                     counter = 1
                     while (self.architecture_manager.architectures_dir / f"{target_dir_name}_{counter}").exists():
@@ -2054,8 +2059,6 @@ class ModelImportDialog(QDialog):
                         shutil.copytree(item, model_target_dir / item.name)
             
             show_info(f"Model '{model_metadata.name}' and architecture '{arch_info.name}' imported successfully")
-            self.parent_widget.refresh_architectures()
-            self.parent_widget.refresh_models()
             self.accept()
             
         except Exception as e:
