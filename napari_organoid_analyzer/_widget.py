@@ -2788,7 +2788,7 @@ class OrganoidAnalyzerWidget(QWidget):
 
         for property_name, property in properties.items():
             if len(property) != bboxes.shape[0]:
-                raise RuntimeError(f"Number of properties for propertsave_annotay {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
+                raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
             
         annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
         if annotation_dialogue.exec() != QDialog.Accepted:
@@ -2822,6 +2822,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 feature_data[arr_id] = value
                 properties.update({annotation_data['property_name']: feature_data})
         labels_layer.properties = properties
+        self._update_detection_data_tab()
 
     def _on_add_signal(self):
         signal_dialog = SignalDialog(self, self._get_layer_names())
