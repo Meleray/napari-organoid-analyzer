@@ -1650,6 +1650,7 @@ class OrganoidAnalyzerWidget(QWidget):
             new_bboxes = self.cur_shapes_layer.data
             properties = self.cur_shapes_layer.properties.copy()
             new_ids = properties.get('bbox_id', [])
+            scores = properties.get('score', [1.0]*len(new_ids))
             self._update_num_organoids(len(new_ids))
             curr_next_id = self.organoiDL.storage[self.cur_shapes_layer.name]['next_id']
         
@@ -1659,7 +1660,9 @@ class OrganoidAnalyzerWidget(QWidget):
                 new_ids = [int(id_val) for id_val in new_ids]
             except ValueError:
                 contains_nan = True
+
             if len(new_ids) > len(set(new_ids)) or contains_nan:
+                # Duplicate or missing IDs for some detections.
                 used_id = set()
                 for idx, id_val in enumerate(new_ids):
                     curr_nan = False
@@ -1671,13 +1674,14 @@ class OrganoidAnalyzerWidget(QWidget):
                         new_ids[idx] = int(curr_next_id)
                         used_id.add(curr_next_id)
                         curr_next_id += 1
-                        properties['score'][idx] = 1.0
+                        scores[idx] = 1.0
                     else:
                         used_id.add(id_val)
 
 
             new_ids = list(map(int, new_ids))
             properties['bbox_id'] = new_ids
+            properties['score'] = scores
             self.cur_shapes_layer.properties = properties
             self.organoiDL.update_bboxes_scores(self.cur_shapes_layer.name, new_bboxes, properties, image_shape)
             self._save_cache_results(self.cur_shapes_layer.name)
