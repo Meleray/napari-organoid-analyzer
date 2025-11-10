@@ -345,7 +345,16 @@ class OrganoiDL():
         collated_signal_masks: dict({signal_name: Numpy array of size [H, W]})
             Collated signal masks (binary, value 255)
         """
-        showed_ids = self.storage.get(shapes_name, {}).get('displayed_ids', [])
+        # self.storage[shapes_name] = {
+        #     'detection_data': detection_data,
+        #     'image_size': list(img.shape[:2]),
+        #     'next_id': bboxes.size(0) + 1,
+        #     'segmentation_data': {},
+        # }
+
+        # storage = self.storage[shapes_name]  # Default values?
+
+        showed_ids = self.storage[shapes_name].get('displayed_ids', [])
         assert len(bboxes) == len(showed_ids), "Number of bboxes must match number of stored displayed IDs"
         
         # Initialize collated masks
@@ -361,7 +370,9 @@ class OrganoiDL():
         
         # Initialize segmentation data storage for all organoids
         for curr_id in showed_ids:
-            self.storage[shapes_name]['segmentation_data'][curr_id] = {}
+            segmentation_data = self.storage[shapes_name].get('segmentation_data', {})
+            segmentation_data[curr_id] = {}
+            self.storage[shapes_name]['segmentation_data'] = segmentation_data
         
         # STEP 1: Set image once, predict masks and compute features
         self.sam_predictor.set_image(img)
