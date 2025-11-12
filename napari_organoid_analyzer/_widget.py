@@ -307,20 +307,20 @@ class OrganoidAnalyzerWidget(QWidget):
             f"cache_{image_hash}.json"
         )
         
-        with open(cache_file, 'w') as f:
-            scale = self.viewer.layers[corr_image_name].scale[:2]
-            confidence = self.stored_confidences.get(layer_name, self.confidence)
-            min_diameter = self.stored_diameters.get(layer_name, self.min_diameter)
+        # Create a dictionary to store the data
+        scale = self.viewer.layers[corr_image_name].scale[:2]
+        confidence = self.stored_confidences.get(layer_name, self.confidence)
+        min_diameter = self.stored_diameters.get(layer_name, self.min_diameter)
 
-            # Create a dictionary to store the data
-            cache_data = {
-                'scale': scale.tolist(),
-                'confidence': confidence,
-                'min_diameter': min_diameter
-            }
-            cache_data.update(self.organoiDL.storage.get(layer_name, {}))
-                
-            # Write the data to the cache file
+        cache_data = {
+            'scale': scale.tolist(),
+            'confidence': confidence,
+            'min_diameter': min_diameter
+        }
+        cache_data.update(self.organoiDL.storage.get(layer_name, {}))
+        
+        # Write the data to the cache file
+        with open(cache_file, 'w') as f:
             json.dump(cache_data, f)
                 
         self.cache_index[image_hash] = cache_file
@@ -332,19 +332,24 @@ class OrganoidAnalyzerWidget(QWidget):
         try:
             with open(cache_file, 'r') as f:
                 cache_data = json.load(f)
-                if "detection_data" in cache_data:
-                    # Convert all keys (bbox_ids) to integers
-                    cache_data['detection_data'] = {
-                        int(k): v for k, v in cache_data['detection_data'].items()
-                    }
-                if "segmentation_data" in cache_data:
-                    cache_data['segmentation_data'] = {
-                        int(k): v for k, v in cache_data.get('segmentation_data', {}).items()
-                    }
-                return cache_data
         except (json.JSONDecodeError, IOError):
             show_error(f"Failed to load cached results from {cache_file}")
             return None
+        
+        if "detection_data" in cache_data:
+            # Convert all keys (bbox_ids) to integers
+            cache_data['detection_data'] = {
+                int(k): v for k, v in cache_data['detection_data'].items()
+            }
+        if "segmentation_data" in cache_data:
+            cache_data['segmentation_data'] = {
+                int(k): v for k, v in cache_data.get('segmentation_data', {}).items()
+            }
+        if "annotation_data" in cache_data:
+            cache_data['annotation_data'] = {
+                int(k): v for k, v in cache_data.get('annotation_data', {}).items()
+            }
+        return cache_data
         
     
     def _create_shapes_from_cache(self, image_layer_name, cache_data, labels_layer_name=None):
@@ -2786,9 +2791,9 @@ class OrganoidAnalyzerWidget(QWidget):
         bboxes = np.array(convert_boxes_from_napari_view(bboxes))
         properties = labels_layer.properties.copy()
 
-        for property_name, property in properties.items():
-            if len(property) != bboxes.shape[0]:
-                raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
+        # for property_name, property in properties.items():
+        #     if len(property) != bboxes.shape[0]:
+        #         raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
             
         annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
         if annotation_dialogue.exec() != QDialog.Accepted:
@@ -2796,21 +2801,23 @@ class OrganoidAnalyzerWidget(QWidget):
             return
         new_annotations = annotation_dialogue.get_annotations()
         if annotation_data['type'] == "Ruler":
-            property_names = [f"{annotation_data['property_name']}_line", 
-                              f"{annotation_data['property_name']}_total_length",
-                              f"{annotation_data['property_name']}_average_length",
-                              f"{annotation_data['property_name']}_count"
-                              ]
-            for idx, property_name in enumerate(property_names):
-                if property_name in properties:
-                    feature_data = properties[property_name]
-                else:
-                    feature_data = ["" for i in range(len(properties['bbox_id']))]
-                cur_box_ids = properties['bbox_id']
-                for box_id, value in new_annotations.items():
-                    arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-                    feature_data[arr_id] = value[idx]
-                    properties.update({property_name: feature_data})
+            pass
+            # TODO: update features from within the annotation process
+            # property_names = [f"{annotation_data['property_name']}_line", 
+            #                   f"{annotation_data['property_name']}_total_length",
+            #                   f"{annotation_data['property_name']}_average_length",
+            #                   f"{annotation_data['property_name']}_count"
+            #                   ]
+            # for idx, property_name in enumerate(property_names):
+            #     if property_name in properties:
+            #         feature_data = properties[property_name]
+            #     else:
+            #         feature_data = ["" for i in range(len(properties['bbox_id']))]
+            #     cur_box_ids = properties['bbox_id']
+            #     for box_id, value in new_annotations.items():
+            #         arr_id = np.where(cur_box_ids == int(box_id))[0][0]
+            #         feature_data[arr_id] = value[idx]
+            #         properties.update({property_name: feature_data})
         else:
             if annotation_data['property_name'] in properties:
                 feature_data = properties[annotation_data['property_name']]

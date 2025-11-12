@@ -1134,7 +1134,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         self.next_btn.setEnabled(self.current_idx < len(self.annotated_ids) - 1)
         self.progress_label.setText(f"Annotation progress: {self.current_idx + 1}/{len(self.annotated_ids)}")
     
-    def save_annotation(self):
+    def save_annotation_config(self):
         """Save current annotation to dictionary"""
         if self.current_idx >= 0:
             box_id = self.annotated_ids[self.current_idx]
@@ -1144,13 +1144,22 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         annotation_features[self.annotation_name] = {
             'property_name': self.property_name,
             'type': "Ruler",
-            'data': self.annotations,
-            'ids': self.selected_ids_edit.text().strip(),
+            # 'data': self.annotations,
+            # 'ids': self.selected_ids_edit.text().strip(),
             'padding': self.padding,
             'border_width': self.border_width
         }
         session.set_session_var('annotation_features', annotation_features)
 
+    def save_annotation(self):
+        """Save current annotation to dictionary"""
+        if self.current_idx >= 0:
+            box_id = self.annotated_ids[self.current_idx]
+            self.annotations[str(box_id)] = self.image_label.get_lines()
+        
+        # Update shape layer properties with annotated values
+        data = self.annotations
+        ids = self.selected_ids_edit.text().strip(),
     
     def show_prev(self):
         """Show previous bounding box"""
