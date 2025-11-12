@@ -33,25 +33,28 @@ import numpy as np
 import math
 import cv2
 import copy
+import json
 
-def get_annotation_dialogue(image, layer_data, layer_properties, annotation_data, parent):
+def get_annotation_dialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer):
     type = annotation_data['type']
     if type == "Text":
-        return TextAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent)
+        return TextAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
     elif type == "Ruler":
-        return RulerAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent)
+        return RulerAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
     elif type == 'Objects / Boxes':
-        return BboxAnnotationWidget(image, layer_data, layer_properties, annotation_data, parent)
+        return BboxAnnotationWidget(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
     elif type == 'Classes':
-        return ClassAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent)
+        return ClassAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
     elif type == 'Number':
-        return NumberAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent)
+        return NumberAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
     else:
         raise RuntimeError(f"Unknown annotation type {type}!")
     
 class AnnotationDialogue(QDialog):
-    def __init__(self, image, layer_data, layer_properties, annotation_data, parent=None):
+    def __init__(self, image, layer_data, layer_properties, annotation_data, parent=None, labels_layer=None):
         super().__init__(parent)
+        self.main_widget = parent
+        self.labels_layer = labels_layer
         self.layer_data = layer_data
         self.layer_properties = layer_properties
         self.annotation_name = annotation_data['annotation_name']
@@ -87,6 +90,53 @@ class AnnotationDialogue(QDialog):
 
     def _setup_annotation_widget(self):
         pass
+
+    def parse_id_str(self, ids_str):
+        def get_error_dialog(text):
+            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+
+        if len(ids_str.strip()) > 0:
+            annotated_ids = set()
+            for token in ids_str.strip().split(','):
+                token = token.strip()
+                if token == "":
+                    get_error_dialog(f"Empty token encountered")
+                    return
+                if '-' in token:
+                    range_data = token.split('-')
+                    if len(range_data) != 2:
+                        get_error_dialog(f"Invalid range {token}")
+                        return
+                    try:
+                        start = int(range_data[0])
+                        end = int(range_data[1])
+                        if start < 0 or end < 0 or start > end:
+                            get_error_dialog(f"Invalid range {token}")
+                            return
+                        for curr_id in range(start, end+1):
+                            if not curr_id in self.layer_properties['bbox_id']:
+                                get_error_dialog(f"ID {curr_id} not found in labels")
+                                return
+                            annotated_ids.add(curr_id)
+
+                    except ValueError:
+                        get_error_dialog(f"Invalid range {token}")
+                        return
+                else:
+                    try:
+                        curr_id = int(token)
+                        if not curr_id in self.layer_properties['bbox_id']:
+                            get_error_dialog(f"ID {curr_id} not found in labels")
+                            return
+                    except ValueError:
+                        get_error_dialog(f"Invalid token \"{token}\"")
+                        return 
+                    annotated_ids.add(curr_id)  
+        else:
+            annotated_ids = set(self.layer_properties['bbox_id'])
+
+        return annotated_ids
+
         
 class TextAnnotationDialogue(AnnotationDialogue):
     def __init__(self, *args, **kwargs):
@@ -221,48 +271,49 @@ class TextAnnotationDialogue(AnnotationDialogue):
         self.padding = self.padding_spin.value()
         self.border_width = self.border_width_spin.value()
 
-        def get_error_dialog(text):
-            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
+        # def get_error_dialog(text):
+        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
 
-        if len(self.selected_ids_edit.text().strip()) > 0:
-            self.annotated_ids = set()
-            for token in self.selected_ids_edit.text().strip().split(','):
-                token = token.strip()
-                if token == "":
-                    get_error_dialog(f"Empty token encountered")
-                    return
-                if '-' in token:
-                    range_data = token.split('-')
-                    if len(range_data) != 2:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                    try:
-                        start = int(range_data[0])
-                        end = int(range_data[1])
-                        if start < 0 or end < 0 or start > end:
-                            get_error_dialog(f"Invalid range {token}")
-                            return
-                        for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['bbox_id']:
-                                get_error_dialog(f"ID {curr_id} not found in labels")
-                                return
-                            self.annotated_ids.add(curr_id)
+        # if len(self.selected_ids_edit.text().strip()) > 0:
+        #     self.annotated_ids = set()
+        #     for token in self.selected_ids_edit.text().strip().split(','):
+        #         token = token.strip()
+        #         if token == "":
+        #             get_error_dialog(f"Empty token encountered")
+        #             return
+        #         if '-' in token:
+        #             range_data = token.split('-')
+        #             if len(range_data) != 2:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #             try:
+        #                 start = int(range_data[0])
+        #                 end = int(range_data[1])
+        #                 if start < 0 or end < 0 or start > end:
+        #                     get_error_dialog(f"Invalid range {token}")
+        #                     return
+        #                 for curr_id in range(start, end+1):
+        #                     if not curr_id in self.layer_properties['bbox_id']:
+        #                         get_error_dialog(f"ID {curr_id} not found in labels")
+        #                         return
+        #                     self.annotated_ids.add(curr_id)
 
-                    except ValueError:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                else:
-                    try:
-                        curr_id = int(token)
-                        if not curr_id in self.layer_properties['bbox_id']:
-                            get_error_dialog(f"ID {curr_id} not found in labels")
-                            return
-                    except ValueError:
-                        get_error_dialog(f"Invalid token \"{token}\"")
-                        return 
-                    self.annotated_ids.add(curr_id)  
-        else:
-            self.annotated_ids = set(self.layer_properties['bbox_id'])
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #         else:
+        #             try:
+        #                 curr_id = int(token)
+        #                 if not curr_id in self.layer_properties['bbox_id']:
+        #                     get_error_dialog(f"ID {curr_id} not found in labels")
+        #                     return
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid token \"{token}\"")
+        #                 return 
+        #             self.annotated_ids.add(curr_id)  
+        # else:
+        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         for box_id in self.annotated_ids:
@@ -513,48 +564,49 @@ class NumberAnnotationDialogue(AnnotationDialogue):
         self.padding = self.padding_spin.value()
         self.border_width = self.border_width_spin.value()
 
-        def get_error_dialog(text):
-            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
+        # def get_error_dialog(text):
+        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
 
-        if len(self.selected_ids_edit.text().strip()) > 0:
-            self.annotated_ids = set()
-            for token in self.selected_ids_edit.text().strip().split(','):
-                token = token.strip()
-                if token == "":
-                    get_error_dialog(f"Empty token encountered")
-                    return
-                if '-' in token:
-                    range_data = token.split('-')
-                    if len(range_data) != 2:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                    try:
-                        start = int(range_data[0])
-                        end = int(range_data[1])
-                        if start < 0 or end < 0 or start > end:
-                            get_error_dialog(f"Invalid range {token}")
-                            return
-                        for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['bbox_id']:
-                                get_error_dialog(f"ID {curr_id} not found in labels")
-                                return
-                            self.annotated_ids.add(curr_id)
+        # if len(self.selected_ids_edit.text().strip()) > 0:
+        #     self.annotated_ids = set()
+        #     for token in self.selected_ids_edit.text().strip().split(','):
+        #         token = token.strip()
+        #         if token == "":
+        #             get_error_dialog(f"Empty token encountered")
+        #             return
+        #         if '-' in token:
+        #             range_data = token.split('-')
+        #             if len(range_data) != 2:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #             try:
+        #                 start = int(range_data[0])
+        #                 end = int(range_data[1])
+        #                 if start < 0 or end < 0 or start > end:
+        #                     get_error_dialog(f"Invalid range {token}")
+        #                     return
+        #                 for curr_id in range(start, end+1):
+        #                     if not curr_id in self.layer_properties['bbox_id']:
+        #                         get_error_dialog(f"ID {curr_id} not found in labels")
+        #                         return
+        #                     self.annotated_ids.add(curr_id)
 
-                    except ValueError:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                else:
-                    try:
-                        curr_id = int(token)
-                        if not curr_id in self.layer_properties['bbox_id']:
-                            get_error_dialog(f"ID {curr_id} not found in labels")
-                            return
-                    except ValueError:
-                        get_error_dialog(f"Invalid token \"{token}\"")
-                        return 
-                    self.annotated_ids.add(curr_id)  
-        else:
-            self.annotated_ids = set(self.layer_properties['bbox_id'])
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #         else:
+        #             try:
+        #                 curr_id = int(token)
+        #                 if not curr_id in self.layer_properties['bbox_id']:
+        #                     get_error_dialog(f"ID {curr_id} not found in labels")
+        #                     return
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid token \"{token}\"")
+        #                 return 
+        #             self.annotated_ids.add(curr_id)  
+        # else:
+        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: float(val) for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         for box_id in self.annotated_ids:
@@ -1031,50 +1083,64 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         self.padding = self.padding_spin.value()
         self.border_width = self.border_width_spin.value()
 
-        def get_error_dialog(text):
-            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
 
-        if len(self.selected_ids_edit.text().strip()) > 0:
-            self.annotated_ids = set()
-            for token in self.selected_ids_edit.text().strip().split(','):
-                token = token.strip()
-                if token == "":
-                    get_error_dialog(f"Empty token encountered")
-                    return
-                if '-' in token:
-                    range_data = token.split('-')
-                    if len(range_data) != 2:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                    try:
-                        start = int(range_data[0])
-                        end = int(range_data[1])
-                        if start < 0 or end < 0 or start > end:
-                            get_error_dialog(f"Invalid range {token}")
-                            return
-                        for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['bbox_id']:
-                                get_error_dialog(f"ID {curr_id} not found in labels")
-                                return
-                            self.annotated_ids.add(curr_id)
+        # def get_error_dialog(text):
+        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
 
-                    except ValueError:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                else:
-                    try:
-                        curr_id = int(token)
-                        if not curr_id in self.layer_properties['bbox_id']:
-                            get_error_dialog(f"ID {curr_id} not found in labels")
-                            return
-                    except ValueError:
-                        get_error_dialog(f"Invalid token \"{token}\"")
-                        return 
-                    self.annotated_ids.add(curr_id)  
-        else:
-            self.annotated_ids = set(self.layer_properties['bbox_id'])
+        # if len(self.selected_ids_edit.text().strip()) > 0:
+        #     self.annotated_ids = set()
+        #     for token in self.selected_ids_edit.text().strip().split(','):
+        #         token = token.strip()
+        #         if token == "":
+        #             get_error_dialog(f"Empty token encountered")
+        #             return
+        #         if '-' in token:
+        #             range_data = token.split('-')
+        #             if len(range_data) != 2:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #             try:
+        #                 start = int(range_data[0])
+        #                 end = int(range_data[1])
+        #                 if start < 0 or end < 0 or start > end:
+        #                     get_error_dialog(f"Invalid range {token}")
+        #                     return
+        #                 for curr_id in range(start, end+1):
+        #                     if not curr_id in self.layer_properties['bbox_id']:
+        #                         get_error_dialog(f"ID {curr_id} not found in labels")
+        #                         return
+        #                     self.annotated_ids.add(curr_id)
+
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #         else:
+        #             try:
+        #                 curr_id = int(token)
+        #                 if not curr_id in self.layer_properties['bbox_id']:
+        #                     get_error_dialog(f"ID {curr_id} not found in labels")
+        #                     return
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid token \"{token}\"")
+        #                 return 
+        #             self.annotated_ids.add(curr_id)  
+        # else:
+        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
         
-        self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
+        # self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
+
+        self.annotations = dict()
+        bbox_ids = self.labels_layer.properties['bbox_id']
+        lines_feature = self.labels_layer.properties.get(f"{self.property_name}_line", 
+                                                         [""]*len(bbox_ids))
+        for bbox_id in self.annotated_ids:
+            idx = np.nonzero(bbox_ids==bbox_id)
+            print('idx', idx)
+            lines = json.loads(lines_feature[idx])
+            print('lines', lines)
+            self.annotations[bbox_id] = lines
+
         self.annotated_ids = list(self.annotated_ids)
         
         # Switch to annotation screen
@@ -1158,8 +1224,28 @@ class RulerAnnotationDialogue(AnnotationDialogue):
             self.annotations[str(box_id)] = self.image_label.get_lines()
         
         # Update shape layer properties with annotated values
-        data = self.annotations
-        ids = self.selected_ids_edit.text().strip(),
+        new_annotations = self.get_annotations()
+        
+        property_names = [f"{self.property_name}_line", 
+                          f"{self.property_name}_total_length",
+                          f"{self.property_name}_average_length",
+                          f"{self.property_name}_count",]
+        
+        for idx, property_name in enumerate(property_names):
+            # Retrieves existing annotations
+            if property_name in self.labels_layer.properties:
+                feature_data = self.labels_layer.properties[property_name]
+            else:
+                feature_data = ["" for i in range(len(self.labels_layer.properties['bbox_id']))]
+
+            # Updates with new annotations
+            cur_box_ids = self.labels_layer.properties['bbox_id']
+            for box_id, value in new_annotations.items():
+                arr_id = np.where(cur_box_ids == int(box_id))[0][0]
+                feature_data[arr_id] = value[idx]
+                self.labels_layer.properties.update({property_name: feature_data})
+        
+        self.main_widget._save_cache_results(self.labels_layer.name)
     
     def show_prev(self):
         """Show previous bounding box"""
@@ -1384,48 +1470,49 @@ class ClassAnnotationDialogue(AnnotationDialogue):
         self.padding = self.padding_spin.value()
         self.border_width = self.border_width_spin.value()
 
-        def get_error_dialog(text):
-            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
+        # def get_error_dialog(text):
+        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
 
-        if len(self.selected_ids_edit.text().strip()) > 0:
-            self.annotated_ids = set()
-            for token in self.selected_ids_edit.text().strip().split(','):
-                token = token.strip()
-                if token == "":
-                    get_error_dialog(f"Empty token encountered")
-                    return
-                if '-' in token:
-                    range_data = token.split('-')
-                    if len(range_data) != 2:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                    try:
-                        start = int(range_data[0])
-                        end = int(range_data[1])
-                        if start < 0 or end < 0 or start > end:
-                            get_error_dialog(f"Invalid range {token}")
-                            return
-                        for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['bbox_id']:
-                                get_error_dialog(f"ID {curr_id} not found in labels")
-                                return
-                            self.annotated_ids.add(curr_id)
+        # if len(self.selected_ids_edit.text().strip()) > 0:
+        #     self.annotated_ids = set()
+        #     for token in self.selected_ids_edit.text().strip().split(','):
+        #         token = token.strip()
+        #         if token == "":
+        #             get_error_dialog(f"Empty token encountered")
+        #             return
+        #         if '-' in token:
+        #             range_data = token.split('-')
+        #             if len(range_data) != 2:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #             try:
+        #                 start = int(range_data[0])
+        #                 end = int(range_data[1])
+        #                 if start < 0 or end < 0 or start > end:
+        #                     get_error_dialog(f"Invalid range {token}")
+        #                     return
+        #                 for curr_id in range(start, end+1):
+        #                     if not curr_id in self.layer_properties['bbox_id']:
+        #                         get_error_dialog(f"ID {curr_id} not found in labels")
+        #                         return
+        #                     self.annotated_ids.add(curr_id)
 
-                    except ValueError:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                else:
-                    try:
-                        curr_id = int(token)
-                        if not curr_id in self.layer_properties['bbox_id']:
-                            get_error_dialog(f"ID {curr_id} not found in labels")
-                            return
-                    except ValueError:
-                        get_error_dialog(f"Invalid token \"{token}\"")
-                        return 
-                    self.annotated_ids.add(curr_id)  
-        else:
-            self.annotated_ids = set(self.layer_properties['bbox_id'])
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #         else:
+        #             try:
+        #                 curr_id = int(token)
+        #                 if not curr_id in self.layer_properties['bbox_id']:
+        #                     get_error_dialog(f"ID {curr_id} not found in labels")
+        #                     return
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid token \"{token}\"")
+        #                 return 
+        #             self.annotated_ids.add(curr_id)  
+        # else:
+        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: list(val) for key, val in self.annotations.items() if int(key) in self.annotated_ids}
 
@@ -1855,48 +1942,49 @@ class BboxAnnotationWidget(AnnotationDialogue):
         self.padding = self.padding_spin.value()
         self.border_width = self.border_width_spin.value()
 
-        def get_error_dialog(text):
-            return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
+        # def get_error_dialog(text):
+        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
 
-        if len(self.selected_ids_edit.text().strip()) > 0:
-            self.annotated_ids = set()
-            for token in self.selected_ids_edit.text().strip().split(','):
-                token = token.strip()
-                if token == "":
-                    get_error_dialog(f"Empty token encountered")
-                    return
-                if '-' in token:
-                    range_data = token.split('-')
-                    if len(range_data) != 2:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                    try:
-                        start = int(range_data[0])
-                        end = int(range_data[1])
-                        if start < 0 or end < 0 or start > end:
-                            get_error_dialog(f"Invalid range {token}")
-                            return
-                        for curr_id in range(start, end+1):
-                            if not curr_id in self.layer_properties['bbox_id']:
-                                get_error_dialog(f"ID {curr_id} not found in labels")
-                                return
-                            self.annotated_ids.add(curr_id)
+        # if len(self.selected_ids_edit.text().strip()) > 0:
+        #     self.annotated_ids = set()
+        #     for token in self.selected_ids_edit.text().strip().split(','):
+        #         token = token.strip()
+        #         if token == "":
+        #             get_error_dialog(f"Empty token encountered")
+        #             return
+        #         if '-' in token:
+        #             range_data = token.split('-')
+        #             if len(range_data) != 2:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #             try:
+        #                 start = int(range_data[0])
+        #                 end = int(range_data[1])
+        #                 if start < 0 or end < 0 or start > end:
+        #                     get_error_dialog(f"Invalid range {token}")
+        #                     return
+        #                 for curr_id in range(start, end+1):
+        #                     if not curr_id in self.layer_properties['bbox_id']:
+        #                         get_error_dialog(f"ID {curr_id} not found in labels")
+        #                         return
+        #                     self.annotated_ids.add(curr_id)
 
-                    except ValueError:
-                        get_error_dialog(f"Invalid range {token}")
-                        return
-                else:
-                    try:
-                        curr_id = int(token)
-                        if not curr_id in self.layer_properties['bbox_id']:
-                            get_error_dialog(f"ID {curr_id} not found in labels")
-                            return
-                    except ValueError:
-                        get_error_dialog(f"Invalid token \"{token}\"")
-                        return 
-                    self.annotated_ids.add(curr_id)  
-        else:
-            self.annotated_ids = set(self.layer_properties['bbox_id'])
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid range {token}")
+        #                 return
+        #         else:
+        #             try:
+        #                 curr_id = int(token)
+        #                 if not curr_id in self.layer_properties['bbox_id']:
+        #                     get_error_dialog(f"ID {curr_id} not found in labels")
+        #                     return
+        #             except ValueError:
+        #                 get_error_dialog(f"Invalid token \"{token}\"")
+        #                 return 
+        #             self.annotated_ids.add(curr_id)  
+        # else:
+        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
         
         self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
         self.annotated_ids = list(self.annotated_ids)

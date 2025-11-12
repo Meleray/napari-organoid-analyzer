@@ -2717,7 +2717,8 @@ class OrganoidAnalyzerWidget(QWidget):
         return widget
 
     def _on_create_annotation_feature(self):
-        annotation_name = f"{self.new_feature_name.text()}_{self.annotation_image_layer_selection.currentText()}"
+        # annotation_name = f"{self.new_feature_name.text()}_{self.annotation_image_layer_selection.currentText()}"
+        annotation_name = self.new_feature_name.text()
         feature = {
             annotation_name: {
                 'property_name': self.new_feature_name.text(),
@@ -2726,7 +2727,8 @@ class OrganoidAnalyzerWidget(QWidget):
         }
         annotation_features = session.SESSION_VARS.get('annotation_features', {})
         if annotation_name in annotation_features:
-            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name or delete existing annotation")
+            # TODO: select feature to continue below and potentially check wether the feature params match. Potentially ask directly if the user wants to continue annotating.
+            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name, delete existing annotation, or select to continue annotation with this feature below.")
         
         # Add annotation feature to cached setting
         annotation_features.update(feature)
@@ -2768,6 +2770,7 @@ class OrganoidAnalyzerWidget(QWidget):
     def annotate(self, feature):
         """Starts the annotation loop with custom annotation widgets depending on the feature type."""
         annotation_name = next(iter(feature))
+        print('annotation_name', annotation_name)
         annotation_data = feature[annotation_name]
         annotation_data.update({"annotation_name": annotation_name})
         
@@ -2795,7 +2798,7 @@ class OrganoidAnalyzerWidget(QWidget):
         #     if len(property) != bboxes.shape[0]:
         #         raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
             
-        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
+        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self, labels_layer)
         if annotation_dialogue.exec() != QDialog.Accepted:
             show_warning("Annotation cancelled. But your changes have been saved.")
             return
