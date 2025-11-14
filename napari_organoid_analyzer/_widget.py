@@ -307,20 +307,20 @@ class OrganoidAnalyzerWidget(QWidget):
             f"cache_{image_hash}.json"
         )
         
-        with open(cache_file, 'w') as f:
-            scale = self.viewer.layers[corr_image_name].scale[:2]
-            confidence = self.stored_confidences.get(layer_name, self.confidence)
-            min_diameter = self.stored_diameters.get(layer_name, self.min_diameter)
+        # Create a dictionary to store the data
+        scale = self.viewer.layers[corr_image_name].scale[:2]
+        confidence = self.stored_confidences.get(layer_name, self.confidence)
+        min_diameter = self.stored_diameters.get(layer_name, self.min_diameter)
 
-            # Create a dictionary to store the data
-            cache_data = {
-                'scale': scale.tolist(),
-                'confidence': confidence,
-                'min_diameter': min_diameter
-            }
-            cache_data.update(self.organoiDL.storage.get(layer_name, {}))
-                
-            # Write the data to the cache file
+        cache_data = {
+            'scale': scale.tolist(),
+            'confidence': confidence,
+            'min_diameter': min_diameter,
+            'organoiDL_storage': self.organoiDL.storage.get(layer_name, {}),
+        }
+
+        # Write the data to the cache file
+        with open(cache_file, 'w') as f:
             json.dump(cache_data, f)
                 
         self.cache_index[image_hash] = cache_file
@@ -332,19 +332,27 @@ class OrganoidAnalyzerWidget(QWidget):
         try:
             with open(cache_file, 'r') as f:
                 cache_data = json.load(f)
-                if "detection_data" in cache_data:
-                    # Convert all keys (bbox_ids) to integers
-                    cache_data['detection_data'] = {
-                        int(k): v for k, v in cache_data['detection_data'].items()
-                    }
-                if "segmentation_data" in cache_data:
-                    cache_data['segmentation_data'] = {
-                        int(k): v for k, v in cache_data.get('segmentation_data', {}).items()
-                    }
-                return cache_data
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
             show_error(f"Failed to load cached results from {cache_file}")
             return None
+        
+        storage = cache_data['organoiDL_storage']
+    
+        # Convert all keys (bbox_ids) to integers
+        if "detection_data" in storage:
+            storage['detection_data'] = {
+                int(k): v for k, v in storage['detection_data'].items()
+            }
+        if "segmentation_data" in storage:
+            storage['segmentation_data'] = {
+                int(k): v for k, v in storage.get('segmentation_data', {}).items()
+            }
+        if "annotation_data" in storage:
+            for key, values in storage['annotation_data'].items():
+                storage['annotation_data'][key] = {
+                    int(k): v for k, v in values.items()
+                }
+        return cache_data
         
     
     def _create_shapes_from_cache(self, image_layer_name, cache_data, labels_layer_name=None):
@@ -356,11 +364,11 @@ class OrganoidAnalyzerWidget(QWidget):
         confidence = cache_data.pop('confidence', self.confidence)
         min_diameter = cache_data.pop('min_diameter', self.min_diameter)
 
-
         if scale[0] != self.viewer.layers[image_layer_name].scale[0] or scale[1] != self.viewer.layers[image_layer_name].scale[1]:
             show_warning("Scale mismatch between cached data and current image layer")
 
-        if len(cache_data.get('detection_data', {})) == 0:
+        storage = cache_data.pop('organoiDL_storage', {})
+        if len(storage.get('detection_data', {})) == 0:
             show_error("No detections found in cache")
             return False
             
@@ -368,7 +376,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if labels_layer_name is None:
             labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         
-        self.organoiDL.storage[labels_layer_name] = cache_data
+        self.organoiDL.storage[labels_layer_name] = storage
         self._update_detections(
             labels_layer_name=labels_layer_name, 
             confidence=confidence, 
@@ -416,7 +424,7 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.cur_shapes_layer.name in segmentation_selection_items:
                 self.segmentation_image_layer_selection.setCurrentText(self.cur_shapes_layer.name)
             else:
-                show_error(f"Current shapes layer '{self.cur_shapes_layer.name}' not found in segmentation layer selection")
+                show_error(f"Current shapes layer '{self.cur_shapes_layer.name}' not found in segmentation layer selection {segmentation_selection_items}")
         else:
             self.segmentation_image_layer_selection.setCurrentText('')
 
@@ -2712,7 +2720,8 @@ class OrganoidAnalyzerWidget(QWidget):
         return widget
 
     def _on_create_annotation_feature(self):
-        annotation_name = f"{self.new_feature_name.text()}_{self.annotation_image_layer_selection.currentText()}"
+        # annotation_name = f"{self.new_feature_name.text()}_{self.annotation_image_layer_selection.currentText()}"
+        annotation_name = self.new_feature_name.text()
         feature = {
             annotation_name: {
                 'property_name': self.new_feature_name.text(),
@@ -2721,7 +2730,8 @@ class OrganoidAnalyzerWidget(QWidget):
         }
         annotation_features = session.SESSION_VARS.get('annotation_features', {})
         if annotation_name in annotation_features:
-            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name or delete existing annotation")
+            # TODO: select feature to continue below and potentially check wether the feature params match. Potentially ask directly if the user wants to continue annotating.
+            raise ValueError(f"Annotation of name {annotation_name} already exists. Please choose a different name, delete existing annotation, or select to continue annotation with this feature below.")
         
         # Add annotation feature to cached setting
         annotation_features.update(feature)
@@ -2786,42 +2796,19 @@ class OrganoidAnalyzerWidget(QWidget):
         bboxes = np.array(convert_boxes_from_napari_view(bboxes))
         properties = labels_layer.properties.copy()
 
-        for property_name, property in properties.items():
-            if len(property) != bboxes.shape[0]:
-                raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
+        # for property_name, property in properties.items():
+        #     if len(property) != bboxes.shape[0]:
+        #         raise RuntimeError(f"Number of properties for property save_annotation {property_name} ({len(property)}) doesn't match number of bounding boxes ({bboxes.shape[0]})")
             
-        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self)
+        annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self, labels_layer)
         if annotation_dialogue.exec() != QDialog.Accepted:
-            show_warning("Annotation cancelled. But your changes have been saved.")
-            return
-        new_annotations = annotation_dialogue.get_annotations()
-        if annotation_data['type'] == "Ruler":
-            property_names = [f"{annotation_data['property_name']}_line", 
-                              f"{annotation_data['property_name']}_total_length",
-                              f"{annotation_data['property_name']}_average_length",
-                              f"{annotation_data['property_name']}_count"
-                              ]
-            for idx, property_name in enumerate(property_names):
-                if property_name in properties:
-                    feature_data = properties[property_name]
-                else:
-                    feature_data = ["" for i in range(len(properties['bbox_id']))]
-                cur_box_ids = properties['bbox_id']
-                for box_id, value in new_annotations.items():
-                    arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-                    feature_data[arr_id] = value[idx]
-                    properties.update({property_name: feature_data})
-        else:
-            if annotation_data['property_name'] in properties:
-                feature_data = properties[annotation_data['property_name']]
-            else:
-                feature_data = ["" for i in range(len(properties['bbox_id']))]
-            cur_box_ids = properties['bbox_id']
-            for box_id, value in new_annotations.items():
-                arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-                feature_data[arr_id] = value
-                properties.update({annotation_data['property_name']: feature_data})
+            show_warning("Annotation cancelled.")
+
+        # Update properties with annotated values
+        new_annotations = annotation_dialogue.return_annotations()
+        properties.update(new_annotations)
         labels_layer.properties = properties
+        
         self._update_detection_data_tab()
 
     def _on_add_signal(self):
