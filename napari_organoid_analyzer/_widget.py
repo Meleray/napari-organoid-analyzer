@@ -315,10 +315,10 @@ class OrganoidAnalyzerWidget(QWidget):
         cache_data = {
             'scale': scale.tolist(),
             'confidence': confidence,
-            'min_diameter': min_diameter
+            'min_diameter': min_diameter,
+            'organoiDL_storage': self.organoiDL.storage.get(layer_name, {}),
         }
-        cache_data.update(self.organoiDL.storage.get(layer_name, {}))
-        
+
         # Write the data to the cache file
         with open(cache_file, 'w') as f:
             json.dump(cache_data, f)
@@ -332,23 +332,26 @@ class OrganoidAnalyzerWidget(QWidget):
         try:
             with open(cache_file, 'r') as f:
                 cache_data = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
             show_error(f"Failed to load cached results from {cache_file}")
             return None
         
-        if "detection_data" in cache_data:
-            # Convert all keys (bbox_ids) to integers
-            cache_data['detection_data'] = {
-                int(k): v for k, v in cache_data['detection_data'].items()
+        storage = cache_data['organoiDL_storage']
+    
+        # Convert all keys (bbox_ids) to integers
+        if "detection_data" in storage:
+            storage['detection_data'] = {
+                int(k): v for k, v in storage['detection_data'].items()
             }
-        if "segmentation_data" in cache_data:
-            cache_data['segmentation_data'] = {
-                int(k): v for k, v in cache_data.get('segmentation_data', {}).items()
+        if "segmentation_data" in storage:
+            storage['segmentation_data'] = {
+                int(k): v for k, v in storage.get('segmentation_data', {}).items()
             }
-        if "annotation_data" in cache_data:
-            cache_data['annotation_data'] = {
-                int(k): v for k, v in cache_data.get('annotation_data', {}).items()
-            }
+        if "annotation_data" in storage:
+            for key, values in storage['annotation_data'].items():
+                storage['annotation_data'][key] = {
+                    int(k): v for k, v in values.items()
+                }
         return cache_data
         
     
@@ -361,11 +364,11 @@ class OrganoidAnalyzerWidget(QWidget):
         confidence = cache_data.pop('confidence', self.confidence)
         min_diameter = cache_data.pop('min_diameter', self.min_diameter)
 
-
         if scale[0] != self.viewer.layers[image_layer_name].scale[0] or scale[1] != self.viewer.layers[image_layer_name].scale[1]:
             show_warning("Scale mismatch between cached data and current image layer")
 
-        if len(cache_data.get('detection_data', {})) == 0:
+        storage = cache_data.pop('organoiDL_storage', {})
+        if len(storage.get('detection_data', {})) == 0:
             show_error("No detections found in cache")
             return False
             
@@ -373,7 +376,7 @@ class OrganoidAnalyzerWidget(QWidget):
         if labels_layer_name is None:
             labels_layer_name = f'{image_layer_name}-Labels-Cache-{datetime.strftime(datetime.now(), "%H_%M_%S")}'
         
-        self.organoiDL.storage[labels_layer_name] = cache_data
+        self.organoiDL.storage[labels_layer_name] = storage
         self._update_detections(
             labels_layer_name=labels_layer_name, 
             confidence=confidence, 
@@ -2770,7 +2773,6 @@ class OrganoidAnalyzerWidget(QWidget):
     def annotate(self, feature):
         """Starts the annotation loop with custom annotation widgets depending on the feature type."""
         annotation_name = next(iter(feature))
-        print('annotation_name', annotation_name)
         annotation_data = feature[annotation_name]
         annotation_data.update({"annotation_name": annotation_name})
         
@@ -2801,21 +2803,12 @@ class OrganoidAnalyzerWidget(QWidget):
         annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self, labels_layer)
         if annotation_dialogue.exec() != QDialog.Accepted:
             show_warning("Annotation cancelled.")
-        new_annotations = annotation_dialogue.get_annotations()
-        if annotation_data['type'] == "Ruler":
-            properties.update(new_annotations)
-            labels_layer.properties = properties
-        else:
-            if annotation_data['property_name'] in properties:
-                feature_data = properties[annotation_data['property_name']]
-            else:
-                feature_data = ["" for i in range(len(properties['bbox_id']))]
-            cur_box_ids = properties['bbox_id']
-            for box_id, value in new_annotations.items():
-                arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-                feature_data[arr_id] = value
-                properties.update({annotation_data['property_name']: feature_data})
-            labels_layer.properties = properties
+
+        # Update properties with annotated values
+        new_annotations = annotation_dialogue.return_annotations()
+        properties.update(new_annotations)
+        labels_layer.properties = properties
+        
         self._update_detection_data_tab()
 
     def _on_add_signal(self):
