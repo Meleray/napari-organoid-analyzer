@@ -38,15 +38,20 @@ import json
 def get_annotation_dialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer):
     type = annotation_data['type']
     if type == "Text":
-        return TextAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
+        return TextAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, 
+                                      labels_layer=labels_layer)
     elif type == "Ruler":
-        return RulerAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
+        return RulerAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, 
+                                       labels_layer=labels_layer)
     elif type == 'Objects / Boxes':
-        return BboxAnnotationWidget(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
+        return BboxAnnotationWidget(image, layer_data, layer_properties, annotation_data, parent, 
+                                    labels_layer=labels_layer)
     elif type == 'Classes':
-        return ClassAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
+        return ClassAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, 
+                                       labels_layer=labels_layer)
     elif type == 'Number':
-        return NumberAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, labels_layer)
+        return NumberAnnotationDialogue(image, layer_data, layer_properties, annotation_data, parent, 
+                                        labels_layer=labels_layer)
     else:
         raise RuntimeError(f"Unknown annotation type {type}!")
     
@@ -334,6 +339,8 @@ class TextAnnotationDialogue(AnnotationDialogue):
         box_id = self.annotated_ids[self.current_idx]
         layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
+        xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        x1, y1, x2, y2 = xmin, ymin, xmax, ymax
         
         h, w = self.image.height(), self.image.width()
         x1_disp = max(0, int(x1) - self.padding)
@@ -625,6 +632,8 @@ class NumberAnnotationDialogue(AnnotationDialogue):
         box_id = self.annotated_ids[self.current_idx]
         layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
+        xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        x1, y1, x2, y2 = xmin, ymin, xmax, ymax
         
         h, w = self.image.height(), self.image.width()
         x1_disp = max(0, int(x1) - self.padding)
@@ -840,7 +849,7 @@ class RulerImageLabel(QLabel):
         if self.cur_snippet_coords is None:
             raise ValueError("Snippet coordinates must be set before setting bounding boxes.")
         self.lines = []
-        for line in lines:
+        for line in copy.deepcopy(lines):
             for point in line:
                 tmp = point[0]
                 point[0] = point[1]
@@ -1085,61 +1094,16 @@ class RulerAnnotationDialogue(AnnotationDialogue):
 
         self.annotated_ids = self.parse_id_str(self.selected_ids_edit.text())
 
-        # def get_error_dialog(text):
-        #     return QMessageBox.warning(self, "Invalid IDs", f"Invalid selected IDs string ({text}).")
+        # Create dictionaries in internal storage in case they don't exist.
+        if 'annotation_data' not in self.main_widget.organoiDL.storage:
+            self.main_widget.organoiDL.storage['annotation_data'] = {
+                self.annotation_name: dict()
+            }
+        if self.annotation_name not in self.main_widget.organoiDL.storage['annotation_data']:
+            self.main_widget.organoiDL.storage['annotation_data'][self.annotation_name] = dict()
 
-        # if len(self.selected_ids_edit.text().strip()) > 0:
-        #     self.annotated_ids = set()
-        #     for token in self.selected_ids_edit.text().strip().split(','):
-        #         token = token.strip()
-        #         if token == "":
-        #             get_error_dialog(f"Empty token encountered")
-        #             return
-        #         if '-' in token:
-        #             range_data = token.split('-')
-        #             if len(range_data) != 2:
-        #                 get_error_dialog(f"Invalid range {token}")
-        #                 return
-        #             try:
-        #                 start = int(range_data[0])
-        #                 end = int(range_data[1])
-        #                 if start < 0 or end < 0 or start > end:
-        #                     get_error_dialog(f"Invalid range {token}")
-        #                     return
-        #                 for curr_id in range(start, end+1):
-        #                     if not curr_id in self.layer_properties['bbox_id']:
-        #                         get_error_dialog(f"ID {curr_id} not found in labels")
-        #                         return
-        #                     self.annotated_ids.add(curr_id)
-
-        #             except ValueError:
-        #                 get_error_dialog(f"Invalid range {token}")
-        #                 return
-        #         else:
-        #             try:
-        #                 curr_id = int(token)
-        #                 if not curr_id in self.layer_properties['bbox_id']:
-        #                     get_error_dialog(f"ID {curr_id} not found in labels")
-        #                     return
-        #             except ValueError:
-        #                 get_error_dialog(f"Invalid token \"{token}\"")
-        #                 return 
-        #             self.annotated_ids.add(curr_id)  
-        # else:
-        #     self.annotated_ids = set(self.layer_properties['bbox_id'])
-        
-        # self.annotations = {key: val for key, val in self.annotations.items() if int(key) in self.annotated_ids}
-
-        self.annotations = dict()
-        bbox_ids = self.labels_layer.properties['bbox_id']
-        lines_feature = self.labels_layer.properties.get(f"{self.property_name}_line", 
-                                                         [""]*len(bbox_ids))
-        for bbox_id in self.annotated_ids:
-            idx = np.nonzero(bbox_ids==bbox_id)
-            print('idx', idx)
-            lines = json.loads(lines_feature[idx])
-            print('lines', lines)
-            self.annotations[bbox_id] = lines
+        # Load current annotation status from internal storage
+        self.annotations = self.main_widget.organoiDL.storage['annotation_data'][self.annotation_name]
 
         self.annotated_ids = list(self.annotated_ids)
         
@@ -1149,12 +1113,15 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         # Initialize annotation state
         self.current_idx = 0
         self.update_display()
+
     
     def update_display(self):
         """Update displayed bounding box"""
         box_id = self.annotated_ids[self.current_idx]
         layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
+        xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        x1, y1, x2, y2 = xmin, ymin, xmax, ymax
         
         h, w = self.image.height(), self.image.width()
         x1_disp = max(0, int(x1) - self.padding)
@@ -1191,8 +1158,8 @@ class RulerAnnotationDialogue(AnnotationDialogue):
             self.props_table.item(i, 1).setToolTip(str(value))    
             
         # Set current annotation
-        if str(box_id) in self.annotations:
-            current_annot = self.annotations[str(box_id)]
+        if box_id in self.annotations:
+            current_annot = self.annotations[box_id]
         else:
             current_annot = []
         self.annotation_edit.setText(str(current_annot))
@@ -1204,7 +1171,7 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         """Save current annotation to dictionary"""
         if self.current_idx >= 0:
             box_id = self.annotated_ids[self.current_idx]
-            self.annotations[str(box_id)] = self.image_label.get_lines()
+            self.annotations[box_id] = self.image_label.get_lines()
         
         annotation_features = session.SESSION_VARS.get('annotation_features', {})
         annotation_features[self.annotation_name] = {
@@ -1221,30 +1188,10 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         """Save current annotation to dictionary"""
         if self.current_idx >= 0:
             box_id = self.annotated_ids[self.current_idx]
-            self.annotations[str(box_id)] = self.image_label.get_lines()
-        
-        # Update shape layer properties with annotated values
-        new_annotations = self.get_annotations()
-        
-        property_names = [f"{self.property_name}_line", 
-                          f"{self.property_name}_total_length",
-                          f"{self.property_name}_average_length",
-                          f"{self.property_name}_count",]
-        
-        for idx, property_name in enumerate(property_names):
-            # Retrieves existing annotations
-            if property_name in self.labels_layer.properties:
-                feature_data = self.labels_layer.properties[property_name]
-            else:
-                feature_data = ["" for i in range(len(self.labels_layer.properties['bbox_id']))]
+            self.annotations[box_id] = self.image_label.get_lines()
 
-            # Updates with new annotations
-            cur_box_ids = self.labels_layer.properties['bbox_id']
-            for box_id, value in new_annotations.items():
-                arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-                feature_data[arr_id] = value[idx]
-                self.labels_layer.properties.update({property_name: feature_data})
-        
+        # Update internal storage with annotated data and cache results
+        self.main_widget.organoiDL.storage['annotation_data'][self.annotation_name].update(self.annotations)
         self.main_widget._save_cache_results(self.labels_layer.name)
     
     def show_prev(self):
@@ -1271,20 +1218,45 @@ class RulerAnnotationDialogue(AnnotationDialogue):
         for box_id, val in self.annotations.items():
             total_length, average_length, count = get_poly_lines_data(val)
             final_annot[box_id] = (str(val), total_length, average_length, count)
-        return final_annot
+
+        
+        # Update shape layer properties with annotated values
+        property_names = [f"{self.property_name}_line", 
+                          f"{self.property_name}_total_length",
+                          f"{self.property_name}_average_length",
+                          f"{self.property_name}_count",]
+        
+        properties_update = dict()
+        for idx, property_name in enumerate(property_names):
+            # # Retrieves existing annotations
+            # if property_name in self.labels_layer.properties:
+            #     feature_data = self.labels_layer.properties[property_name]
+            # else:
+            
+            # Internal storage is the ground truth, properties are updated solely based on internal storage
+            feature_data = ["" for i in range(len(self.labels_layer.properties['bbox_id']))]
+
+            # Updates with new annotations
+            cur_box_ids = self.labels_layer.properties['bbox_id']
+            for box_id, value in final_annot.items():
+                arr_id = np.where(cur_box_ids == box_id)[0][0]
+                feature_data[arr_id] = value[idx]
+            properties_update[property_name] = feature_data
+
+        return properties_update
     
     def accept(self):
         self.save_annotation()
         super().accept()
 
     def reject(self):
-        self.save_annotation()
+        # self.save_annotation()
         super().reject()
 
 class ClassAnnotationDialogue(AnnotationDialogue):
-    def __init__(self, image, layer_data, layer_properties, annotation_data, parent=None):
+    def __init__(self, image, layer_data, layer_properties, annotation_data, parent=None, **kwargs):
         self.classes_list = set(annotation_data.get('classes_list', []))
-        super().__init__(image, layer_data, layer_properties, annotation_data, parent)
+        super().__init__(image, layer_data, layer_properties, annotation_data, parent, **kwargs)
 
     def _setup_start_widget(self):
         widget = QWidget()
@@ -1529,6 +1501,8 @@ class ClassAnnotationDialogue(AnnotationDialogue):
         box_id = self.annotated_ids[self.current_idx]
         layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
+        xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        x1, y1, x2, y2 = xmin, ymin, xmax, ymax
         
         h, w = self.image.height(), self.image.width()
         x1_disp = max(0, int(x1) - self.padding)
@@ -2001,6 +1975,8 @@ class BboxAnnotationWidget(AnnotationDialogue):
         box_id = self.annotated_ids[self.current_idx]
         layer_data_id = np.where(self.layer_properties['bbox_id'] == box_id)[0][0]
         x1, y1, x2, y2 = self.layer_data[layer_data_id]
+        xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        x1, y1, x2, y2 = xmin, ymin, xmax, ymax
         
         h, w = self.image.height(), self.image.width()
         x1_disp = max(0, int(x1) - self.padding)

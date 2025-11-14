@@ -421,7 +421,7 @@ class OrganoidAnalyzerWidget(QWidget):
             if self.cur_shapes_layer.name in segmentation_selection_items:
                 self.segmentation_image_layer_selection.setCurrentText(self.cur_shapes_layer.name)
             else:
-                show_error(f"Current shapes layer '{self.cur_shapes_layer.name}' not found in segmentation layer selection")
+                show_error(f"Current shapes layer '{self.cur_shapes_layer.name}' not found in segmentation layer selection {segmentation_selection_items}")
         else:
             self.segmentation_image_layer_selection.setCurrentText('')
 
@@ -2800,27 +2800,11 @@ class OrganoidAnalyzerWidget(QWidget):
             
         annotation_dialogue = get_annotation_dialogue(image, bboxes, properties, annotation_data, self, labels_layer)
         if annotation_dialogue.exec() != QDialog.Accepted:
-            show_warning("Annotation cancelled. But your changes have been saved.")
-            return
+            show_warning("Annotation cancelled.")
         new_annotations = annotation_dialogue.get_annotations()
         if annotation_data['type'] == "Ruler":
-            pass
-            # TODO: update features from within the annotation process
-            # property_names = [f"{annotation_data['property_name']}_line", 
-            #                   f"{annotation_data['property_name']}_total_length",
-            #                   f"{annotation_data['property_name']}_average_length",
-            #                   f"{annotation_data['property_name']}_count"
-            #                   ]
-            # for idx, property_name in enumerate(property_names):
-            #     if property_name in properties:
-            #         feature_data = properties[property_name]
-            #     else:
-            #         feature_data = ["" for i in range(len(properties['bbox_id']))]
-            #     cur_box_ids = properties['bbox_id']
-            #     for box_id, value in new_annotations.items():
-            #         arr_id = np.where(cur_box_ids == int(box_id))[0][0]
-            #         feature_data[arr_id] = value[idx]
-            #         properties.update({property_name: feature_data})
+            properties.update(new_annotations)
+            labels_layer.properties = properties
         else:
             if annotation_data['property_name'] in properties:
                 feature_data = properties[annotation_data['property_name']]
@@ -2831,7 +2815,7 @@ class OrganoidAnalyzerWidget(QWidget):
                 arr_id = np.where(cur_box_ids == int(box_id))[0][0]
                 feature_data[arr_id] = value
                 properties.update({annotation_data['property_name']: feature_data})
-        labels_layer.properties = properties
+            labels_layer.properties = properties
         self._update_detection_data_tab()
 
     def _on_add_signal(self):
