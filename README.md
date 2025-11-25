@@ -10,24 +10,29 @@ This plugin has been tested with python 3.10 - you may consider using conda or p
 
 1. Install `napari-organoid-analyzer` 
 
+    ```pip install git+https://github.com/Meleray/napari-organoid-analyzer```
+    
+    or
+
     ```pip install git+https://github.com/Meleray/napari-organoid-analyzer@intel-mac```
 
-2. Install `segment-anything`
+3. Install `segment-anything`
 
-```pip install git+https://github.com/facebookresearch/segment-anything.git```
+    ```pip install git+https://github.com/facebookresearch/segment-anything.git```
+    
+    Or 
 
-Or 
-```git clone https://github.com/facebookresearch/segment-anything.git```
-```cd segment-anything```
-```pip install .```
+    ```git clone https://github.com/facebookresearch/segment-anything.git```
+    ```cd segment-anything```
+    ```pip install .```
 
 3. Manually install OpenMMLab dependencies:
 
-     ``` 
+    ``` 
     mim install mmengine
     mim install "mmcv==2.1.0"
     mim install mmdet
-     ```
+    ```
 
 ## How to use?
 After installing, you can start napari (either by typing ```napari``` in your terminal or by launching the application) and select the plugin from the drop down menu.
