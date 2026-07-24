@@ -820,10 +820,17 @@ class OrganoidAnalyzerWidget(QWidget):
             # run_segmentation now returns collated masks directly
             collated_mask, collated_signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
     
-            self.viewer.add_image(collated_mask, name=segmentation_layer_name, blending='additive')
+            self.viewer.add_image(collated_mask, 
+                                  name=segmentation_layer_name, 
+                                  blending='additive', 
+                                  scale=self.viewer.layers[self.image_layer_name].scale)
             for signal_name, collated_signal_mask in collated_signal_masks.items():
                 signal_seg_layer_name = f"Segmentation-{signal_name}-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-                self.viewer.add_image(collated_signal_mask, name=signal_seg_layer_name, blending='additive', colormap="red")
+                self.viewer.add_image(collated_signal_mask, 
+                                      name=signal_seg_layer_name, 
+                                      blending='additive', 
+                                      colormap="red", 
+                                      scale=self.viewer.layers[self.image_layer_name].scale)
             self._update_detections(self.label_layer_name, )
     
         self._update_detection_data_tab()
