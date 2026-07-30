@@ -1,6 +1,5 @@
 import torch
-import pytorch_lightning as pl
-from torch import nn, Tensor
+from torch import nn
 from napari_organoid_analyzer._SAMOS.transformer_layers import TransformerDecoder, MLP, PositionEmbeddingSine
 from napari_organoid_analyzer._SAMOS.matcher import HungarianMatcher
 from napari_organoid_analyzer._SAMOS.losses import SetCriterion
@@ -30,7 +29,6 @@ class DetectionTransformer(nn.Module):
                  aux_loss: bool = False,
                  add_query_before_output = False,
                  scale_bb_before_sigmoid = False,
-                 **kwargs
                 ):
         super().__init__()
         self.backbone_name = backbone_name

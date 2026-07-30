@@ -1,7 +1,9 @@
+notebooks/
+checkpoints/
 model-weights/
 test_img/
+tests/test_*
 tmp/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -86,4 +88,3 @@ venv/
 
 # written by setuptools_scm
 **/_version.py
-

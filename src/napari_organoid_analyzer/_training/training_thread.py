@@ -2,7 +2,7 @@ import sys
 import io
 import threading
 import time
-from PyQt5.QtCore import QThread, pyqtSignal
+from qtpy.QtCore import QThread, Signal
 
 
 class OutputCapture(io.StringIO):
@@ -29,8 +29,8 @@ class OutputCapture(io.StringIO):
 
 class TrainingThread(QThread):
     """ Thread for running training in the background."""
-    output_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str)
+    output_signal = Signal(str)
+    finished_signal = Signal(bool, str)
     
     def __init__(self, arch_instance, X_train, y_train):
         super().__init__()

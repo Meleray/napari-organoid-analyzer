@@ -13,32 +13,27 @@ This plugin has been tested with python 3.10 - you may consider using conda or p
     ```
     pip install git+https://github.com/Meleray/napari-organoid-analyzer
     ```
-    
+
     or
 
     ```
     pip install git+https://github.com/Meleray/napari-organoid-analyzer@intel-mac
     ```
 
-3. Install `segment-anything`
+2.  Some detection models require OpenMMLab to be installed. 
 
-    ```
-    pip install git+https://github.com/facebookresearch/segment-anything.git
-    ```
-    
-    Or 
-
-    ```
-    git clone https://github.com/facebookresearch/segment-anything.git
-    cd segment-anything
-    pip install .
-    ```
-
-3. Manually install OpenMMLab dependencies:
-
+    Either manually install OpenMMLab dependencies:
     ``` 
     mim install mmengine
     mim install "mmcv==2.1.0"
+    mim install mmdet
+    ```
+    Installing mmcv likely requires `python>=3.8,<=3.12` and `torch==2.4.0` to be manually installed before installing mmcv.
+
+    Alternatively, install directly with `mmcv-lite` if you do not have or need GPU support:
+    ```
+    pip install git+https://github.com/Meleray/napari-organoid-analyzer[all,mmcv-lite]
+    mim install mmengine
     mim install mmdet
     ```
 

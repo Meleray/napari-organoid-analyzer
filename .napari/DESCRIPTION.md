@@ -1,4 +1,4 @@
-## Description
+<!-- ## Description
 
 A napari plugin to automatically count lung organoids from microscopy imaging data. Several object detection DL models were trained on patches of 2D microscopy data. Model inference is run using a sliding window approach, with a 50% overlap and the option for predicting on multiple window sizes and scales, the results of which are then merged using NMS.
 
@@ -100,4 +100,4 @@ bibtex:
 }
 ```
 
-
+ -->

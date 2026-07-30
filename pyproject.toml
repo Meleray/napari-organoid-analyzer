@@ -1,11 +1,131 @@
+[project]
+name = "napari-organoid-analyzer"
+dynamic = ["version"]
+description = "A plugin to detect, segment, track and analyze organoids in 2D microscopy images."
+readme = "README.md"
+license = "MIT"
+# license-files = ["LICENSE"]
+authors = [
+  {name = "Meleray"},
+  {email = "mikhail.konov@tum.de"},
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: napari",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+requires-python = ">=3.11"
+# napari can be included in dependencies if napari imports are required.
+# However, you should not include napari[all], napari[qt],
+# or any other Qt bindings directly (e.g. PyQt5, PySide2).
+# See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
+dependencies = [
+    "numpy",
+    "magicgui",
+    "qtpy",
+    "scikit-image",
+    "torch",
+    "torchvision",
+    "scipy",
+    "scikit-learn",
+    "pandas",
+    "pytorch-lightning",
+    "matplotlib",
+    "omegaconf",
+    "trackpy",
+    "opencv-python-headless",
+    "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
+    "imagecodecs",
+]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/Meleray/napari-organoid-analyzer/issues"
+"Documentation" = "https://github.com/Meleray/napari-organoid-analyzer#README.md"
+"Source Code" = "https://github.com/Meleray/napari-organoid-analyzer"
+"User Support" = "https://github.com/Meleray/napari-organoid-analyzer/issues"
+
+[project.optional-dependencies]
+# Allow easily installation with the full, default napari installation
+# (including Qt backend) using napari-organoid-analyzer[all].
+all = ["napari[all]"]
+# mmcv-lite = ["torch<2.5.0", "mmcv-lite>=2.0.0rc4, <2.2.0"]
+# mmcv = ["torch==2.4.0", "mmcv"]  # mmcv installation requires a torch version, for which a precompiled mmcv package is available.
+
+[dependency-groups]
+dev = [
+    "tox-uv",
+    "pytest",  # https://docs.pytest.org/en/latest/contents.html
+    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
+    "prek",  # fast drop-in replacement for pre-commit
+    "pytest-qt",  # https://pytest-qt.readthedocs.io/en/latest/
+    "napari[qt]",  # test with napari's default Qt bindings
+]
+
+[project.entry-points."napari.manifest"]
+napari-organoid-analyzer = "napari_organoid_analyzer:napari.yaml"
+
+
+
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77.0.3", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+include-package-data = true
 
-[tool.black]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]
+
+[tool.setuptools_scm]
+write_to = "src/napari_organoid_analyzer/_version.py"
+fallback_version = "0.0.1+nogit"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]  # recommended by PP309; deprecation warnings cause failures so leaving for the user to enable if desired
+log_cli_level = "INFO"
+testpaths = ["tests"]
+
+[tool.ruff]
 line-length = 79
+fix = true
 
-[tool.isort]
-profile = "black"
-line_length = 79
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", #flake8
+    "UP", # pyupgrade
+    "I", # isort
+    "BLE", # flake8-blind-exception
+    "B", # flake8-bugbear
+    "A", # flake8-builtins
+    "C4", # flake8-comprehensions
+    "ISC", # flake8-implicit-str-concat
+    "G", # flake8-logging-format
+    "PIE", # flake8-pie
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # line too long. handled by formatter
+    "UP006", "UP007", # type annotation. As using magicgui require runtime type annotation then we disable this.
+]
+
+
+
+
