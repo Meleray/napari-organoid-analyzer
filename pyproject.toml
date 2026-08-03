@@ -57,8 +57,10 @@ dependencies = [
 # Allow easily installation with the full, default napari installation
 # (including Qt backend) using napari-organoid-analyzer[all].
 all = ["napari[all]"]
-# mmcv-lite = ["torch<2.5.0", "mmcv-lite>=2.0.0rc4, <2.2.0"]
-# mmcv = ["torch==2.4.0", "mmcv"]  # mmcv installation requires a torch version, for which a precompiled mmcv package is available.
+# czi-bioio = ["bioio", "bioio-czi"]
+czifile = ["czifile[all]"]
+mp4 = ["imageio[pyav]"]
+# mp4 = ["imageio[ffmpeg]"]
 
 [dependency-groups]
 dev = [
