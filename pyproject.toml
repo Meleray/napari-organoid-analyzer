@@ -103,6 +103,9 @@ filterwarnings = [ "error", "ignore::pydantic.warnings.PydanticDeprecatedSince20
 log_cli_level = "INFO"
 testpaths = ["tests"]
 
+[tool.check-wheel-contents]
+ignore = ["W002"]
+
 [tool.ruff]
 line-length = 79
 fix = true

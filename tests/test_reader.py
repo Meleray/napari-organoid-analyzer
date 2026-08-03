@@ -3,6 +3,10 @@ import numpy as np
 from napari_organoid_analyzer._readers._images import get_czi_reader
 
 
+
+def test_something():
+    pass
+
 # # tmp_path is a pytest fixture
 # def test_reader(tmp_path):
 #     """An example of how you might test your plugin."""

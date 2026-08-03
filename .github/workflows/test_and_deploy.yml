@@ -155,7 +155,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-      # - uses: hynek/build-and-inspect-python-package@v2
+      - uses: hynek/build-and-inspect-python-package@v2
       #   with:
       #     check-wheel-contents-args: --ignore-duplicate-files  # Ignoring duplicate file error currently doesn't work.
 
