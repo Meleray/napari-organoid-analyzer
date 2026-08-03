@@ -6,24 +6,29 @@ A napari plugin to automatically detect, segment, annotate, and analyze the morp
 
 ## Installation
 
+### Virtual environment
+
 You may consider using conda or venv to create your dedicated python environment before running the `napari-organoid-analyzer`, for example with
 ```
 python -m venv napari_organoid_analyzer
 ```
-Activate the virtual environment with
+
+Activate the virtual environment:
 ```
 source napari_organoid_analyzer/bin/activate
 ```
-or on Windows in a Command Prompt
+or on Windows in a Command Prompt:
 ```
 "napari_organoid_analyzer\Scripts\activate"
 ```
 
+### Installation
 Then, install `napari-organoid-analyzer` with
 ```
 python -m pip install napari_organoid_analyzer[all]@git+https://github.com/Meleray/napari-organoid-analyzer
 ```
 
+### Support for additional file formats
 If you need to read CZI or MP4 files, instead run
 ```
 python -m pip install napari_organoid_analyzer[all,czifile]@git+https://github.com/Meleray/napari-organoid-analyzer
