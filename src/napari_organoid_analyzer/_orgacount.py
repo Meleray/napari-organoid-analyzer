@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from urllib.request import urlretrieve
 import numpy as np
 from napari.utils import progress
@@ -8,10 +9,8 @@ from napari_organoid_analyzer import settings
 
 #update_version_in_mmdet_init_file('mmdet', '2.2.0', '2.3.0')
 import torch
-import mmdet
-from mmdet.apis import DetInferencer
 from segment_anything import SamPredictor, build_sam_vit_l
-from napari_organoid_analyzer._SAMOS.models.detr_own_impl_model import DetectionTransformer
+from napari_organoid_analyzer._SAMOS import models
 from napari_organoid_analyzer._utils import set_posix_windows, polygon2mask, mask2polygon
 import matplotlib.pyplot as plt
 import cv2
@@ -21,11 +20,12 @@ import trackpy as tp
 import pandas as pd
 import json
 import copy
-import scipy
+# import scipy
 from scipy.spatial.distance import cdist
 from skimage.measure import regionprops, label
 from skimage.feature import graycomatrix, graycoprops
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
+
+# sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_SAMOS'))
 
 DENSITY_K_NEIGHBORS = 5  # You can adjust this value as needed
 
@@ -100,42 +100,66 @@ class OrganoiDL():
     
     def init_sam_predictor(self):
         if self.sam_predictor is None:
+            # self.download_sam_model()
             sam_model = build_sam_vit_l(checkpoint=_utils.join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"]))
             self.sam_predictor = SamPredictor(sam_model=sam_model.to(self.device))
 
     def set_model(self, model_name):
         ''' Initialise  model instance and load model checkpoint and send to device. '''
-        self.init_sam_predictor()
         self.model_name = model_name
-        model_checkpoint = _utils.join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
-        if model_name == 'SAMOS':
-            with set_posix_windows():
-                checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=False)
-            self.model = DetectionTransformer(**checkpoint['hyper_parameters'])
-            new_state_dict = {}
-            for key, value in checkpoint['state_dict'].items():
-                new_key = key.replace('model.', '') 
-                new_state_dict[new_key] = value
-            self.model.load_state_dict(new_state_dict)
-            self.model.to(self.device)
-        else:
-            mmdet_path = os.path.dirname(mmdet.__file__)
-            config_dst = _utils.join_paths(mmdet_path, str(settings.CONFIGS[model_name]["destination"]))
-            # download the corresponding config if it doesn't exist already
-            if not os.path.exists(config_dst):
-                urlretrieve(settings.CONFIGS[model_name]["source"], config_dst, self.handle_progress)
-            self.model = DetInferencer(config_dst, model_checkpoint, self.device, show_progress=False)
 
-    def download_model(self, model_name='yolov3'):
-        ''' Downloads the model from zenodo and stores it in settings.MODELS_DIR '''
-        # specify the url of the model which is to be downloaded
+        # Download checkpoint if necessary
+        model_checkpoint = _utils.join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
+        if not Path(model_checkpoint).exists():
+            raise RuntimeError(f'Model checkpoint does not exist for model {model_name}')
+        
+        with set_posix_windows():
+            checkpoint = torch.load(model_checkpoint, map_location=self.device, weights_only=True)
+
+        if model_name == 'SAMOS':
+            self.init_sam_predictor()
+            self.model = models.detr_own_impl_model.DetectionTransformer(**checkpoint['hyperparameters'])
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.to(self.device)
+            self.model.eval()
+        elif model_name == 'FRCNN':
+            self.model = models.faster_rcnn_model.FasterRCNN(**checkpoint['hyperparameters'])
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.to(self.device)
+            self.model.eval()
+        elif model_name in ["MultiOrg FRCNN",
+                            "MultiOrg YOLOv3",
+                            "MultiOrg SSD",
+                            "MultiOrg RTMDet",]:
+            if model_name == "MultiOrg FRCNN":
+                from ._multiorg_detection.frcnn import FasterRCNN
+                self.model = FasterRCNN(num_classes=1)
+            if model_name == "MultiOrg YOLOv3":
+                from ._multiorg_detection.yolov3 import YOLOV3
+                self.model = YOLOV3(num_classes=1)
+            if model_name == "MultiOrg SSD":
+                from ._multiorg_detection.ssd import SSD
+                self.model = SSD(num_classes=1)
+            if model_name == "MultiOrg RTMDet":
+                from ._multiorg_detection.rtmdet import RTMDet
+                self.model = RTMDet(num_classes=1)
+            self.model.load_state_dict(checkpoint, strict=True)
+            self.model.eval()
+
+    def download_model(self, model_name):
+        """Downloads the model weights and stores them in settings.MODELS_DIR"""
         down_url = settings.MODELS[model_name]["source"]
-        # specify save location where the file is to be saved
         save_loc = _utils.join_paths(str(settings.MODELS_DIR), settings.MODELS[model_name]["filename"])
-        # downloading using urllib
         urlretrieve(down_url, save_loc, self.handle_progress)
 
-    def sliding_window(self,
+    # def download_sam_model(self):
+    #     """Downloads SAM model weights and stores them in settings.MODELS_DIR"""
+    #     save_loc = _utils.join_paths(str(settings.MODELS_DIR), settings.SAM_MODEL["filename"])
+    #     if not Path(save_loc).exists():
+    #         down_url = settings.SAM_MODEL["url"]
+    #         urlretrieve(down_url, save_loc, self.handle_progress)
+
+    def sliding_window(self, *,
                        test_img,
                        step,
                        window_size,
@@ -144,7 +168,9 @@ class OrganoiDL():
                        prepadded_width,
                        crop_offset,
                        bboxes_list=[],
-                       scores_list=[]):
+                       scores_list=[],
+                       progress_description,
+                       ):
         ''' Runs sliding window inference and returns predicting bounding boxes and confidence scores for each box.
         Inputs
         ----------
@@ -162,10 +188,6 @@ class OrganoiDL():
             The image width before padding was applied
         crop_offset: list of int
             The [x_min, y_min] offset of the current crop in the original image.
-        bboxes_list: list of
-            The
-        scores_list: list of
-            The
         Outputs
         ----------
         pred_bboxes: list of Tensors, default is an empty list
@@ -176,36 +198,45 @@ class OrganoiDL():
             The  resulting confidence scores of the model for the predicted boxes are appended here 
             Same as pred_bboxes, can be empty on first run but stores results of all runs.
         '''
-        for i in progress(range(0, prepadded_height, step), desc="height"):
-            for j in progress(range(0, prepadded_width, step), desc="width"):
-                # cro
-                img_crop = test_img[i:(i+window_size), j:(j+window_size)]
-                # get predictions
-                if self.model_name == 'SAMOS':
-                    #self.model.eval()
-                    with torch.inference_mode():
-                        self.sam_predictor.set_image(img_crop)
-                        image_embedding = self.sam_predictor.features.to(self.device)
-                        pred = self.model.forward(image_embedding, window_size)
-                        bboxes = pred[0]['boxes']
-                        scores = pred[0]['scores']
-                else:
-                    output = self.model(img_crop)
-                    bboxes = output['predictions'][0]['bboxes']
-                    scores = output['predictions'][0]['scores']
-                if len(bboxes)==0:
-                    print(f"Step ({i},{j}): No predictions")
-                    continue
-                else:
-                    print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
-                    for bbox_id in range(len(bboxes)):
-                        y1, x1, y2, x2 = bboxes[bbox_id] # predictions from model will be in form x1,y1,x2,y2
-                        x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
-                        x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
-                        y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
-                        y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
-                        bboxes_list.append(torch.Tensor([x1_real, y1_real, x2_real, y2_real]))
-                        scores_list.append(scores[bbox_id])
+        total_steps = len(list(range(0, prepadded_height, step))) * len(list(range(0, prepadded_width, step)))
+        with progress(total=total_steps) as prg:
+            prg.set_description(progress_description)
+            for i in range(0, prepadded_height, step):
+                for j in range(0, prepadded_width, step):
+                    # crop
+                    img_crop = test_img[i:(i+window_size), j:(j+window_size)]
+                    # get predictions
+                    if self.model_name == 'SAMOS':
+                        with torch.inference_mode():
+                            self.sam_predictor.set_image(img_crop)
+                            image_embedding = self.sam_predictor.features.to(self.device)
+                            pred = self.model.forward(image_embedding, window_size)
+                            bboxes = pred[0]['boxes']
+                            scores = pred[0]['scores']
+                    elif self.model_name == 'FRCNN':
+                        with torch.inference_mode():
+                            pred = self.model(img_crop)
+                            bboxes = pred[0]['boxes']
+                            scores = pred[0]['scores']
+                    else:
+                        with torch.inference_mode():
+                            output = self.model(img_crop)
+                            bboxes = output['bboxes']
+                            scores = output['scores']
+                    prg.update(1)
+                    if len(bboxes)==0:
+                        # print(f"Step ({i},{j}): No predictions")
+                        continue
+                    else:
+                        # print(f"Step ({i},{j}): {bboxes[0]}, {scores[0]}")
+                        for bbox_id in range(len(bboxes)):
+                            y1, x1, y2, x2 = bboxes[bbox_id] # predictions from model will be in form x1,y1,x2,y2
+                            x1_real = torch.div(x1+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                            x2_real = torch.div(x2+i, rescale_factor, rounding_mode='floor') + crop_offset[0]
+                            y1_real = torch.div(y1+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
+                            y2_real = torch.div(y2+j, rescale_factor, rounding_mode='floor') + crop_offset[1]
+                            bboxes_list.append(torch.Tensor([x1_real, y1_real, x2_real, y2_real]))
+                            scores_list.append(scores[bbox_id])
         print('Number of predictions:', len(bboxes_list))
         print('Number of scores:', len(scores_list))
         return bboxes_list, scores_list
@@ -237,7 +268,7 @@ class OrganoiDL():
         bboxes = []
         scores = []
         # run for all window sizes
-        for window_size, downsampling in progress(zip(window_sizes, downsampling_sizes), desc="window conf"):
+        for window_size, downsampling in progress(zip(window_sizes, downsampling_sizes), desc="window conf", total=len(window_sizes)):
             # compute the step for the sliding window, based on window overlap
             rescale_factor = 1 / downsampling
             # window size after rescaling
@@ -257,39 +288,40 @@ class OrganoiDL():
                 crop_offset_for_sliding_window = [x1, y1]
 
 
-                bboxes, scores = self.sliding_window(ready_img,
-                                                     step,
-                                                     current_window_size, # use the rescaled window size
-                                                     rescale_factor,
-                                                     prepadded_height,
-                                                     prepadded_width,
-                                                     crop_offset_for_sliding_window,
-                                                     bboxes,
-                                                     scores)
+                bboxes, scores = self.sliding_window(test_img=ready_img,
+                                                     step=step,
+                                                     window_size=current_window_size, # use the rescaled window size
+                                                     rescale_factor=rescale_factor,
+                                                     prepadded_height=prepadded_height,
+                                                     prepadded_width=prepadded_width,
+                                                     crop_offset=crop_offset_for_sliding_window,
+                                                     bboxes_list=bboxes,
+                                                     scores_list=scores,
+                                                     progress_description=f'Win. size {window_size}, downsampling. {downsampling}')
         # stack results
-        bboxes = torch.stack(bboxes)
-        scores = torch.Tensor(scores)
-        # apply NMS to remove overlaping boxes
-        bboxes, pred_scores = _utils.apply_nms(bboxes, scores)
+        if len(bboxes) == 0:
+            bboxes = torch.zeros(0, 4)
+            pred_scores = torch.zeros(0)
+        else:
+            bboxes = torch.stack(bboxes)
+            scores = torch.Tensor(scores)
+            # apply NMS to remove overlaping boxes
+            bboxes, pred_scores = _utils.apply_nms(bboxes, scores)
 
         detection_data = {int(i+1): {
             'bbox': json.dumps(bboxes[i].tolist()),
             'score': pred_scores[i].item(),
         } for i in range(bboxes.size(0))}
 
-        centers = []
-        bbox_ids = []
-        for bbox_id, det in detection_data.items():
-            bbox = json.loads(det['bbox'])
-            y1, x1, y2, x2 = bbox
-            center = ((y1 + y2) / 2, (x1 + x2) / 2)
-            centers.append(center)
-            bbox_ids.append(bbox_id)
+        if bboxes.shape[0] > 0:
+            # Compute distance to nearest neighbors
+            centers = torch.stack([
+                (bboxes[:, 0] + bboxes[:, 2]) / 2, 
+                (bboxes[:, 1] + bboxes[:, 3]) / 2, 
+            ], axis=1).numpy()
+            dist_matrix = cdist(centers, centers)
 
-        centers = np.array(centers)
-        dist_matrix = cdist(centers, centers)
-
-        for i, bbox_id in enumerate(bbox_ids):
+        for i, bbox_id in enumerate(range(1, len(detection_data)+1)):
             # Exclude self (distance zero)
             dists = np.delete(dist_matrix[i], i)
             if len(dists) >= DENSITY_K_NEIGHBORS:
@@ -353,6 +385,7 @@ class OrganoiDL():
         # }
 
         # storage = self.storage[shapes_name]  # Default values?
+        self.init_sam_predictor()
 
         showed_ids = self.storage[shapes_name].get('displayed_ids', [])
         assert len(bboxes) == len(showed_ids), "Number of bboxes must match number of stored displayed IDs"

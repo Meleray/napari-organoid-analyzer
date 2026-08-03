@@ -5,14 +5,21 @@ contributions:
     - id: napari-organoid-analyzer.OrganoidAnalyzerWidget
       python_name: napari_organoid_analyzer._widget:OrganoidAnalyzerWidget
       title: Make organoid analyzer widget
-    - id: napari-organoid-analyzer.get_reader
+    - id: napari-organoid-analyzer.get_annotation_reader
       title: Read ".json" annotation files
-      python_name: napari_organoid_analyzer._reader:get_reader
+      python_name: napari_organoid_analyzer._readers._annotation_data:get_reader
+    - id: napari-organoid-analyzer.get_czi_reader
+      title: Read ".czi" image files
+      python_name: napari_organoid_analyzer._readers._images:get_czi_reader
   widgets:
     - command: napari-organoid-analyzer.OrganoidAnalyzerWidget
       display_name: Organoid-Analyzer
   readers:
-    - command: napari-organoid-analyzer.get_reader
+    - command: napari-organoid-analyzer.get_annotation_reader
       filename_patterns:
       - '*.json'
+      accepts_directories: false
+    - command: napari-organoid-analyzer.get_czi_reader
+      filename_patterns:
+      - '*.czi'
       accepts_directories: false

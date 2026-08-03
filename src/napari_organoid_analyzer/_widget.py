@@ -608,6 +608,19 @@ class OrganoidAnalyzerWidget(QWidget):
                 urlretrieve(settings.SAM_MODEL["url"], save_loc, self.handle_progress)
                 self.progress_box.hide()
 
+    def _download_model_with_confirmation(self, model_name):
+        # check if model exists locally and if not ask user if it's ok to download
+        if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[model_name]["filename"]): 
+            confirm_window = ConfirmUpload(self, model_name)
+            confirm_window.exec()
+            # if user clicks cancel return doing nothing 
+            if confirm_window.result() != QDialog.Accepted: return
+            # otherwise download model and display progress in progress bar
+            else: 
+                self.progress_box.show()
+                self.organoiDL.download_model(model_name)
+                self.progress_box.hide()
+
     def _on_run_click(self):
         """ Is called whenever Run Organoid Counter button is clicked """
         # check if an image has been loaded
@@ -618,24 +631,15 @@ class OrganoidAnalyzerWidget(QWidget):
         if not self.image_layer_name in self.viewer.layers:
             show_error(f"Image layer {self.image_layer_name} not found in the viewer.")
             return
-        
-        self._check_sam()
 
-        # check if model exists locally and if not ask user if it's ok to download
-        if not utils.return_is_file(settings.MODELS_DIR, settings.MODELS[self.model_name]["filename"]): 
-            confirm_window = ConfirmUpload(self, self.model_name)
-            confirm_window.exec()
-            # if user clicks cancel return doing nothing 
-            if confirm_window.result() != QDialog.Accepted: return
-            # otherwise download model and display progress in progress bar
-            else: 
-                self.progress_box.show()
-                self.organoiDL.download_model(self.model_name)
-                self.progress_box.hide()
+        if self.model_name == 'SAMOS':
+            self._check_sam()
+
+        self._download_model_with_confirmation(self.model_name)
         
         # load model checkpoint
         self.organoiDL.set_model(self.model_name)
-        if self.organoiDL.img_scale[0] == 0: 
+        if self.organoiDL.img_scale[0] == 0:
             self.organoiDL.set_scale(self.viewer.layers[self.image_layer_name].scale[:2])
         
         # make sure the number of windows and downsamplings are the same
@@ -820,10 +824,17 @@ class OrganoidAnalyzerWidget(QWidget):
             # run_segmentation now returns collated masks directly
             collated_mask, collated_signal_masks = self.organoiDL.run_segmentation(image_data, self.label_layer_name, bboxes, merged_signal_data)
     
-            self.viewer.add_image(collated_mask, name=segmentation_layer_name, blending='additive')
+            self.viewer.add_image(collated_mask, 
+                                  name=segmentation_layer_name, 
+                                  blending='additive', 
+                                  scale=self.viewer.layers[self.image_layer_name].scale)
             for signal_name, collated_signal_mask in collated_signal_masks.items():
                 signal_seg_layer_name = f"Segmentation-{signal_name}-{self.label_layer_name}-{datetime.strftime(datetime.now(), '%H_%M_%S')}"
-                self.viewer.add_image(collated_signal_mask, name=signal_seg_layer_name, blending='additive', colormap="red")
+                self.viewer.add_image(collated_signal_mask, 
+                                      name=signal_seg_layer_name, 
+                                      blending='additive', 
+                                      colormap="red", 
+                                      scale=self.viewer.layers[self.image_layer_name].scale)
             self._update_detections(self.label_layer_name, )
     
         self._update_detection_data_tab()

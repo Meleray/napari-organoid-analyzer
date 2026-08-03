@@ -16,8 +16,8 @@ def get_reader(path):
 def reader_function(path: str) -> layers.Shapes:
     """ Reads the labels in the json file and adds a shapes layer to the napari viewer """
     # laod json
-    f = open(path)
-    annot = json.load(f)
+    with open(path, 'r') as f:
+        annot = json.load(f)
     # initialise empty lists for boxes, ids and scores
     bboxes = []
     ids = []
