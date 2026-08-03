@@ -119,11 +119,8 @@ jobs:
             python-version: "3.12"
 
     steps:
-      - uses: actions/checkout@v7
-      # - uses: hynek/build-and-inspect-python-package@v2
-        with:
-          check-wheel-contents-args: --ignore=W002  # Ignores duplicate file error
-
+      - name: Checkout v7
+        uses: actions/checkout@v7
       - name: Setup python
         uses: astral-sh/setup-uv@v7
         with:
@@ -158,6 +155,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: hynek/build-and-inspect-python-package@v2
+        with:
+          check-wheel-contents-args: --ignore-duplicate-files  # =W002  # Ignores duplicate file error
 
   # deploy:
   #   # this will run when you have tagged a commit, starting with "v*"
