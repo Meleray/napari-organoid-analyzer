@@ -2,7 +2,9 @@ notebooks/
 checkpoints/
 model-weights/
 test_img/
-tests/test_*
+tests/test_sample_data.py
+tests/test_widget.py
+tests/test_writer.py
 tmp/
 # Byte-compiled / optimized / DLL files
 __pycache__/
