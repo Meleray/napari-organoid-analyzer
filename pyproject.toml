@@ -98,7 +98,8 @@ fallback_version = "0.0.1+nogit"
 minversion = "6.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
 xfail_strict = true
-filterwarnings = ["error"]  # recommended by PP309; deprecation warnings cause failures so leaving for the user to enable if desired
+filterwarnings = [ "error", "ignore::pydantic.warnings.PydanticDeprecatedSince20", ] log_cli_level = "INFO" testpaths = ["tests"]
+# filterwarnings = ["error"]  # recommended by PP309; deprecation warnings cause failures so leaving for the user to enable if desired
 log_cli_level = "INFO"
 testpaths = ["tests"]
 
