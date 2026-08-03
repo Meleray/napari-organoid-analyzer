@@ -11,7 +11,7 @@ class ArrayLike(Protocol):
     dtype: np.dtype
 
     def __array__(self) -> np.ndarray: pass
-    def __getitem__(self, key) -> ArrayLike: pass
+    def __getitem__(self, key): pass
 
 LayerTypeName = Literal[
     'image', 'labels', 'points', 'shapes', 'surface', 'tracks', 'vectors'
