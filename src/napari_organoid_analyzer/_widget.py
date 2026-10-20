@@ -1,4 +1,5 @@
 import cv2
+from copy import deepcopy
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1667,7 +1668,7 @@ class OrganoidAnalyzerWidget(QWidget):
             else:
                 image_shape = self.viewer.layers[image_layer_name].data.shape[:2]
             new_bboxes = self.cur_shapes_layer.data
-            properties = self.cur_shapes_layer.properties.copy()
+            properties = deepcopy(self.cur_shapes_layer.properties)
             new_ids = properties.get('bbox_id', [])
             scores = properties.get('score', [1.0]*len(new_ids))
             self._update_num_organoids(len(new_ids))
